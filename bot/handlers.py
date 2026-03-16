@@ -22,6 +22,7 @@ from datetime import datetime
 
 import anthropic
 import pdfplumber
+import google.generativeai as genai
 
 from bot.chat import send_message, download_file
 from bot.sheets import salvar_decisao, buscar_precedentes
@@ -29,6 +30,40 @@ from bot.config import ANTHROPIC_API_KEY, COLUNAS
 
 logger = logging.getLogger(__name__)
 claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+# Gemini como fallback
+_GEMINI_KEY = __import__('os').environ.get("GEMINI_API_KEY", "")
+if _GEMINI_KEY:
+    genai.configure(api_key=_GEMINI_KEY)
+
+
+async def _chamar_ia(prompt: str) -> str:
+    """
+    Chama Claude primeiro. Se falhar (erro de API, timeout, etc.),
+    tenta Gemini como fallback.
+    """
+    # Tenta Claude
+    try:
+        response = await claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        logger.info("IA: Claude respondeu.")
+        return response.content[0].text
+    except Exception as e:
+        logger.warning("Claude falhou (%s). Tentando Gemini...", e)
+
+    # Fallback: Gemini
+    if not _GEMINI_KEY:
+        raise RuntimeError("Claude falhou e GEMINI_API_KEY não está configurada.")
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        logger.info("IA: Gemini respondeu (fallback).")
+        return response.text
+    except Exception as e:
+        raise RuntimeError(f"Ambas as IAs falharam. Último erro: {e}")
 
 # ---------------------------------------------------------------------------
 # MAPA DE SIGLAS — chave: nome completo exato do Google Chat (displayName)
@@ -167,12 +202,7 @@ async def analisar_decisao(texto: str, cliente_hint: str, tipo_hint: str) -> dic
         tipo=tipo_hint or "Não informado — detecte da decisão",
         texto=texto_truncado,
     )
-    response = await claude.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = response.content[0].text
+    raw = await _chamar_ia(prompt)
     return _parse_json(raw)
 
 
@@ -390,12 +420,8 @@ async def handle_busca(space_name: str, tipo: str, tema: str):
     prompt = PROMPT_BUSCA.format(tipo_label=tipo_label, tema=tema, dados=dados_str)
 
     try:
-        response = await claude.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        resultado = _parse_json(response.content[0].text)
+        raw = await _chamar_ia(prompt)
+        resultado = _parse_json(raw)
     except Exception as e:
         logger.exception("Erro na busca IA: %s", e)
         await send_message(space_name, "⚠️ Erro ao processar busca.")
