@@ -10,7 +10,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from bot.handlers import processar_pdf, processar_pdf_bytes, processar_busca, get_ajuda, get_ajuda_card
+from bot.handlers import processar_pdf, processar_pdf_bytes, processar_texto, processar_busca, get_ajuda, get_ajuda_card
 from bot.webhook import send_webhook, send_card
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -35,6 +35,13 @@ class PdfRequest(BaseModel):
 
 class PdfBase64Request(BaseModel):
     pdf_base64: str
+    advogado: str
+    texto: str = ""
+    webhook_url: str
+
+
+class TextoRequest(BaseModel):
+    texto_pdf: str
     advogado: str
     texto: str = ""
     webhook_url: str
@@ -68,6 +75,13 @@ async def buscar(req: BuscaRequest):
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/processar-texto")
+async def processar_texto_endpoint(req: TextoRequest, background_tasks: BackgroundTasks):
+    """Recebe texto já extraído do PDF pelo Apps Script via Drive."""
+    background_tasks.add_task(_run_texto, req)
+    return JSONResponse({"status": "processando"})
+
+
 @app.post("/processar-base64")
 async def processar_base64(req: PdfBase64Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(_run_pdf_base64, req)
@@ -78,6 +92,15 @@ async def processar_base64(req: PdfBase64Request, background_tasks: BackgroundTa
 async def processar(req: PdfRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(_run_pdf, req)
     return JSONResponse({"status": "processando"})
+
+
+async def _run_texto(req: TextoRequest):
+    try:
+        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto)
+        await send_webhook(req.webhook_url, resultado)
+    except Exception as e:
+        logger.exception("Erro ao processar texto: %s", e)
+        await send_webhook(req.webhook_url, "⚠️ Erro ao processar a decisão. Tente reenviar.")
 
 
 async def _run_pdf_base64(req: PdfBase64Request):
