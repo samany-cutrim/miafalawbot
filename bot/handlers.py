@@ -368,6 +368,41 @@ def _formatar_busca(d: dict) -> str:
 # AJUDA
 # ---------------------------------------------------------------------------
 
+def get_ajuda_card() -> dict:
+    return {
+        "cardId": "ajuda",
+        "card": {
+            "header": {
+                "title": "Decisão FA Bot",
+                "subtitle": "Assistente de decisões trabalhistas",
+            },
+            "sections": [
+                {
+                    "header": "📎 Postar uma decisão",
+                    "widgets": [
+                        {"textParagraph": {"text": "Envie o <b>PDF da decisão</b> no grupo. O bot analisa e registra automaticamente."}},
+                        {"decoratedText": {"topLabel": "Cliente (opcional)", "text": "<font face=\"monospace\">Cliente: iFood</font>", "startIcon": {"knownIcon": "PERSON"}}},
+                        {"decoratedText": {"topLabel": "Tipo (opcional)", "text": "<font face=\"monospace\">Tipo: OL</font>", "bottomLabel": "OL · Nuvem · Terceirização · Subsidiária · Ex Funcionário · Ex-Foodlovers · Marketplace", "startIcon": {"knownIcon": "BOOKMARK"}}},
+                    ]
+                },
+                {
+                    "header": "🔍 Buscar precedentes",
+                    "widgets": [
+                        {"decoratedText": {"text": "<font face=\"monospace\">/favoraveis [tema]</font>", "bottomLabel": "Ex: /favoraveis vínculo empregatício", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/desfavoraveis [tema]</font>", "bottomLabel": "Ex: /desfavoraveis responsabilidade subsidiária", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/ajuda</font>", "bottomLabel": "Exibe esta mensagem", "startIcon": {"knownIcon": "STAR"}}},
+                    ]
+                }
+            ]
+        },
+        "_fallback_text": (
+            "*Decisão FA Bot*\n\n"
+            "📎 Envie o PDF no grupo. Opcional: `Cliente: iFood` e `Tipo: OL`\n\n"
+            "🔍 `/favoraveis [tema]` · `/desfavoraveis [tema]` · `/ajuda`"
+        )
+    }
+
+
 def get_ajuda() -> str:
     return (
         "*Decisão FA Bot* — Como usar:\n\n"
