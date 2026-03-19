@@ -258,6 +258,44 @@ async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str) -> st
     return formatar_relatorio(analise, sigla)
 
 
+async def processar_texto(texto_pdf: str, advogado: str, texto: str) -> str:
+    """Processa texto já extraído do PDF pelo Apps Script via Google Drive."""
+    sigla = resolver_sigla(advogado)
+    hints = parse_mensagem(texto)
+
+    if not texto_pdf.strip():
+        return "⚠️ Não foi possível extrair texto do PDF."
+
+    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+
+    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
+    tipo_final = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
+    analise["_cliente_final"] = cliente_final
+    analise["_tipo_final"] = tipo_final
+
+    row = {
+        "DATA DO REGISTRO": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "ADVOGADO": sigla,
+        "TRT": analise.get("trt", ""),
+        "NÚMERO DO PROCESSO": analise.get("numero_processo", ""),
+        "NOME DO RECLAMANTE": analise.get("nome_reclamante", ""),
+        "CLIENTE": cliente_final,
+        "TIPO DE RESPONSABILIDADE": tipo_final,
+        "TIPO DE DECISÃO": analise.get("tipo_decisao", ""),
+        "RESULTADO DA DECISÃO": analise.get("resultado_geral", ""),
+        "DATA DA DECISÃO": analise.get("data_decisao", ""),
+        "ENTENDIMENTOS FAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
+        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
+        "FUNDAMENTOS JURÍDICOS": analise.get("fundamentos_juridicos", ""),
+        "VALOR DA CONDENAÇÃO": analise.get("valor_condenacao", ""),
+        "RESUMO": analise.get("resumo_geral", ""),
+        "OBSERVAÇÕES": analise.get("observacoes_precedente", ""),
+    }
+
+    await salvar_decisao(row)
+    return formatar_relatorio(analise, sigla)
+
+
 async def processar_pdf(pdf_url: str, advogado: str, texto: str) -> str:
     sigla = resolver_sigla(advogado)
     hints = parse_mensagem(texto)
