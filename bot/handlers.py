@@ -225,6 +225,39 @@ def formatar_entendimentos(lista: list) -> str:
 # HANDLER PRINCIPAL
 # ---------------------------------------------------------------------------
 
+async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str) -> str:
+    sigla = resolver_sigla(advogado)
+    hints = parse_mensagem(texto)
+    texto_pdf = extrair_texto_pdf(pdf_bytes)
+    if not texto_pdf.strip():
+        return "Nao foi possivel extrair texto do PDF."
+    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
+    tipo_final = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
+    analise["_cliente_final"] = cliente_final
+    analise["_tipo_final"] = tipo_final
+    row = {
+        "DATA DO REGISTRO": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "ADVOGADO": sigla,
+        "TRT": analise.get("trt", ""),
+        "NUMERO DO PROCESSO": analise.get("numero_processo", ""),
+        "NOME DO RECLAMANTE": analise.get("nome_reclamante", ""),
+        "CLIENTE": cliente_final,
+        "TIPO DE RESPONSABILIDADE": tipo_final,
+        "TIPO DE DECISAO": analise.get("tipo_decisao", ""),
+        "RESULTADO DA DECISAO": analise.get("resultado_geral", ""),
+        "DATA DA DECISAO": analise.get("data_decisao", ""),
+        "ENTENDIMENTOS FAVORAVEIS": formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
+        "ENTENDIMENTOS DESFAVORAVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
+        "FUNDAMENTOS JURIDICOS": analise.get("fundamentos_juridicos", ""),
+        "VALOR DA CONDENACAO": analise.get("valor_condenacao", ""),
+        "RESUMO": analise.get("resumo_geral", ""),
+        "OBSERVACOES": analise.get("observacoes_precedente", ""),
+    }
+    await salvar_decisao(row)
+    return formatar_relatorio(analise, sigla)
+
+
 async def processar_pdf(pdf_url: str, advogado: str, texto: str) -> str:
     sigla = resolver_sigla(advogado)
     hints = parse_mensagem(texto)
