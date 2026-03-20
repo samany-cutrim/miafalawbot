@@ -1,5 +1,5 @@
 """
-Decisões FA Bot v3 — Render + Google Apps Script
+Decisões FA Bot v3 — Render + Google Apps Script + Google Forms
 """
 
 import base64
@@ -10,7 +10,10 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from bot.handlers import processar_pdf, processar_pdf_bytes, processar_texto, processar_busca, get_ajuda, get_ajuda_card
+from bot.handlers import (
+    processar_pdf, processar_pdf_bytes, processar_texto,
+    processar_busca, get_ajuda, get_ajuda_card, get_link
+)
 from bot.webhook import send_webhook, send_card
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -32,13 +35,11 @@ class PdfRequest(BaseModel):
     texto: str = ""
     webhook_url: str
 
-
 class PdfBase64Request(BaseModel):
     pdf_base64: str
     advogado: str
     texto: str = ""
     webhook_url: str
-
 
 class TextoRequest(BaseModel):
     texto_pdf: str
@@ -46,20 +47,32 @@ class TextoRequest(BaseModel):
     texto: str = ""
     webhook_url: str
 
-
 class BuscaRequest(BaseModel):
     tipo: str
     tema: str
     webhook_url: str
 
-
 class AjudaRequest(BaseModel):
     webhook_url: str
 
+class LinkRequest(BaseModel):
+    webhook_url: str
+
+
+# ---------------------------------------------------------------------------
+# ENDPOINTS SÍNCRONOS (respostas rápidas)
+# ---------------------------------------------------------------------------
 
 @app.post("/ajuda")
 async def ajuda(req: AjudaRequest):
-    await send_card(req.webhook_url, get_ajuda_card())
+    card = get_ajuda_card()
+    await send_card(req.webhook_url, card)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/link")
+async def link(req: LinkRequest):
+    await send_webhook(req.webhook_url, get_link())
     return JSONResponse({"status": "ok"})
 
 
@@ -75,9 +88,12 @@ async def buscar(req: BuscaRequest):
     return JSONResponse({"status": "ok"})
 
 
+# ---------------------------------------------------------------------------
+# ENDPOINTS COM BACKGROUND (processamento demorado)
+# ---------------------------------------------------------------------------
+
 @app.post("/processar-texto")
 async def processar_texto_endpoint(req: TextoRequest, background_tasks: BackgroundTasks):
-    """Recebe texto já extraído do PDF pelo Apps Script via Drive."""
     background_tasks.add_task(_run_texto, req)
     return JSONResponse({"status": "processando"})
 
@@ -126,3 +142,4 @@ async def _run_pdf(req: PdfRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
+
