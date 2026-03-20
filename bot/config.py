@@ -1,19 +1,17 @@
 """
 Configurações via variáveis de ambiente.
-GOOGLE_SERVICE_ACCOUNT_JSON: conteúdo JSON da service account (string)
 """
 import os
 import json
 import tempfile
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
 
-# Lê o JSON da variável de ambiente e escreve em arquivo temporário
 _sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 if _sa_json:
     try:
-        # Valida que é JSON válido
         json.loads(_sa_json)
         _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         _tmp.write(_sa_json)
@@ -32,7 +30,7 @@ GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-# Colunas da planilha (ordem exata)
+# Colunas da planilha (ordem exata) — atualize a planilha para incluir as novas colunas
 COLUNAS = [
     "DATA DO REGISTRO",
     "ADVOGADO",
@@ -44,6 +42,8 @@ COLUNAS = [
     "TIPO DE DECISÃO",
     "RESULTADO DA DECISÃO",
     "DATA DA DECISÃO",
+    "JUIZ/RELATOR",
+    "VARA/TURMA",
     "ENTENDIMENTOS FAVORÁVEIS",
     "ENTENDIMENTOS DESFAVORÁVEIS",
     "FUNDAMENTOS JURÍDICOS",
