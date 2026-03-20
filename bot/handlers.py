@@ -1,6 +1,5 @@
 """
-Handlers v3 — lógica de negócio idêntica ao v2.
-Diferença: download do PDF usa a URL já autenticada enviada pelo Apps Script.
+Handlers v3 — lógica de negócio.
 """
 
 import io
@@ -13,12 +12,25 @@ import anthropic
 import pdfplumber
 
 from bot.sheets import salvar_decisao, buscar_precedentes
-from bot.config import ANTHROPIC_API_KEY, COLUNAS
+from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, COLUNAS
 
 import httpx
 
 logger = logging.getLogger(__name__)
-claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+# Claude client
+claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+# Gemini fallback
+if GEMINI_API_KEY:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        _gemini_ok = True
+    except Exception:
+        _gemini_ok = False
+else:
+    _gemini_ok = False
 
 
 # ---------------------------------------------------------------------------
@@ -27,31 +39,52 @@ claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
 SIGLAS: dict[str, str] = {
     "Samany Cutrim":                      "SC",
+    "samany":                             "SC",
     "Letícia Silva":                      "LSS",
+    "leticia":                            "LSS",
     "Pollyanna Rodrigues Godoy Dias":     "PGD",
+    "pollyanna":                          "PGD",
     "Tatiana G. Ferraz Andrade":          "TGFA",
+    "tatiana":                            "TGFA",
     "Natany Valentim Gonçalves":          "NVG",
+    "natany":                             "NVG",
     "Fernando Attilio Trevisan Júnior":   "FAT",
+    "fernando":                           "FAT",
     "Camilla Mele Martinez":              "CMM",
+    "camilla":                            "CMM",
     "Beatriz Agar Domingues da Silva":    "BADS",
+    "beatriz":                            "BADS",
     "Lilian Missora Matsumoto":           "LMM",
+    "lilian":                             "LMM",
     "Indyara Tomé de Brito":              "ITB",
+    "indyara":                            "ITB",
 }
 
 def resolver_sigla(display_name: str) -> str:
+    if not display_name:
+        return "N/A"
+    # Correspondência exata
     if display_name in SIGLAS:
         return SIGLAS[display_name]
+    # Case-insensitive
     lower = display_name.strip().lower()
     for nome, sigla in SIGLAS.items():
         if nome.lower() == lower:
             return sigla
+    # Primeiro nome (ex: "Samany" → "SC")
+    primeiro = lower.split()[0] if lower.split() else lower
+    for nome, sigla in SIGLAS.items():
+        if nome.lower().startswith(primeiro):
+            return sigla
+    # Parcial
     for nome, sigla in SIGLAS.items():
         partes = nome.lower().split()
         if all(p in lower for p in partes[:2]):
             return sigla
+    # Fallback: iniciais
     partes = display_name.strip().split()
     sigla_auto = "".join(p[0].upper() for p in partes if p)
-    logger.warning("Advogado '%s' não encontrado no mapa. Sigla: '%s'", display_name, sigla_auto)
+    logger.warning("Advogado '%s' não encontrado. Sigla: '%s'", display_name, sigla_auto)
     return sigla_auto
 
 
@@ -79,23 +112,7 @@ def parse_mensagem(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# DOWNLOAD DO PDF
-# ---------------------------------------------------------------------------
-
-async def download_pdf(url: str) -> bytes:
-    """
-    Baixa o PDF usando a URL enviada pelo Apps Script.
-    O Apps Script já inclui o token OAuth na URL ou nos headers — 
-    aqui usamos a URL direta (o Apps Script gera uma URL temporária autenticada).
-    """
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        return r.content
-
-
-# ---------------------------------------------------------------------------
-# EXTRAÇÃO DE TEXTO
+# EXTRAÇÃO DE TEXTO DO PDF
 # ---------------------------------------------------------------------------
 
 def extrair_texto_pdf(pdf_bytes: bytes) -> str:
@@ -107,8 +124,77 @@ def extrair_texto_pdf(pdf_bytes: bytes) -> str:
         return ""
 
 
+async def download_pdf(url: str) -> bytes:
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.content
+
+
 # ---------------------------------------------------------------------------
-# ANÁLISE COM CLAUDE
+# EXTRAÇÃO DO TRT DO NÚMERO DO PROCESSO
+# ---------------------------------------------------------------------------
+
+def extrair_trt_do_processo(numero: str) -> str:
+    """
+    Número formato: 0000310-88.2024.5.05.0102
+    O TRT é o dígito após '5.' (posição 4 nos segmentos separados por ponto)
+    Ex: 2024.5.05.0102 → TRT 5
+    """
+    if not numero or numero == "N/A":
+        return "N/A"
+    try:
+        # Remove espaços e busca padrão NNNNNN-NN.AAAA.J.TT.OOOO
+        m = re.search(r'\d{7}-\d{2}\.\d{4}\.(\d)\.(\d{2})\.\d{4}', numero)
+        if m:
+            justica = m.group(1)  # deve ser 5 (Justiça do Trabalho)
+            tribunal = m.group(2).lstrip("0")  # ex: "05" → "5"
+            if justica == "5":
+                return f"TRT-{tribunal}"
+        # Fallback: busca qualquer .5.XX.
+        m2 = re.search(r'\.5\.(\d{2})\.', numero)
+        if m2:
+            tribunal = m2.group(1).lstrip("0")
+            return f"TRT-{tribunal}"
+    except Exception:
+        pass
+    return "N/A"
+
+
+# ---------------------------------------------------------------------------
+# CHAMADA À IA (Claude + fallback Gemini)
+# ---------------------------------------------------------------------------
+
+async def _chamar_ia(prompt: str) -> str:
+    # Tenta Claude
+    if claude:
+        try:
+            response = await claude.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            logger.info("IA: Claude respondeu.")
+            return response.content[0].text
+        except Exception as e:
+            logger.warning("Claude falhou (%s). Tentando Gemini...", e)
+
+    # Fallback Gemini
+    if _gemini_ok:
+        try:
+            import google.generativeai as genai
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            logger.info("IA: Gemini respondeu (fallback).")
+            return response.text
+        except Exception as e:
+            raise RuntimeError(f"Ambas as IAs falharam. Último erro: {e}")
+
+    raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY ou GEMINI_API_KEY.")
+
+
+# ---------------------------------------------------------------------------
+# ANÁLISE COM IA
 # ---------------------------------------------------------------------------
 
 PROMPT_ANALISE = """Você é especialista em decisões judiciais trabalhistas brasileiras.
@@ -123,6 +209,8 @@ Analise a decisão abaixo e retorne APENAS um JSON válido com os campos:
   "resultado_geral": "Favorável ou Desfavorável ou Parcialmente Favorável",
   "cliente_detectado": "nome do réu/reclamado principal ou N/A",
   "tipo_responsabilidade_detectado": "OL ou Nuvem ou Terceirização ou Subsidiária ou Ex Funcionário ou Ex-Foodlovers ou Marketplace ou N/A",
+  "juiz_relator": "nome completo do juiz ou relator que assinou/proferiu a decisão ou N/A",
+  "vara_turma": "número da vara ou turma (ex: 2ª Vara do Trabalho, 3ª Turma) ou N/A",
   "entendimentos_favoraveis": [{{"tema": "", "entendimento": ""}}],
   "entendimentos_desfavoraveis": [{{"tema": "", "entendimento": ""}}],
   "fundamentos_juridicos": "principais fundamentos citados",
@@ -146,12 +234,8 @@ async def analisar_decisao(texto: str, cliente_hint: str, tipo_hint: str) -> dic
         tipo=tipo_hint or "Não informado — detecte da decisão",
         texto=texto[:40000],
     )
-    response = await claude.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return _parse_json(response.content[0].text)
+    raw = await _chamar_ia(prompt)
+    return _parse_json(raw)
 
 
 def _parse_json(raw: str) -> dict:
@@ -165,14 +249,15 @@ def _parse_json(raw: str) -> dict:
     return {k: "N/A" for k in [
         "trt", "numero_processo", "nome_reclamante", "data_decisao",
         "tipo_decisao", "resultado_geral", "cliente_detectado",
-        "tipo_responsabilidade_detectado", "entendimentos_favoraveis",
-        "entendimentos_desfavoraveis", "fundamentos_juridicos",
-        "valor_condenacao", "resumo_geral", "observacoes_precedente",
+        "tipo_responsabilidade_detectado", "juiz_relator", "vara_turma",
+        "entendimentos_favoraveis", "entendimentos_desfavoraveis",
+        "fundamentos_juridicos", "valor_condenacao", "resumo_geral",
+        "observacoes_precedente",
     ]}
 
 
 # ---------------------------------------------------------------------------
-# FORMATAÇÃO
+# FORMATAÇÃO DO RELATÓRIO
 # ---------------------------------------------------------------------------
 
 def formatar_relatorio(d: dict, sigla: str) -> str:
@@ -184,6 +269,8 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
     r += f"🏢 *Cliente:* {d.get('_cliente_final', 'N/A')}\n"
     r += f"⚖️ *Tipo:* {d.get('_tipo_final', 'N/A')}\n"
     r += f"📅 *Data:* {d.get('data_decisao', 'N/A')}\n"
+    r += f"👨‍⚖️ *Juiz/Relator:* {d.get('juiz_relator', 'N/A')}\n"
+    r += f"🏠 *Vara/Turma:* {d.get('vara_turma', 'N/A')}\n"
     r += f"💰 *Valor:* {d.get('valor_condenacao', 'N/A')}\n\n"
     r += f"📝 *Resumo:*\n{d.get('resumo_geral', 'N/A')}\n\n"
 
@@ -222,118 +309,74 @@ def formatar_entendimentos(lista: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# HANDLER PRINCIPAL
+# HANDLERS PRINCIPAIS
 # ---------------------------------------------------------------------------
 
-async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str) -> str:
-    sigla = resolver_sigla(advogado)
-    hints = parse_mensagem(texto)
-    texto_pdf = extrair_texto_pdf(pdf_bytes)
-    if not texto_pdf.strip():
-        return "Nao foi possivel extrair texto do PDF."
-    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+async def _montar_e_salvar(analise: dict, sigla: str, hints: dict) -> str:
     cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
-    tipo_final = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
+    tipo_final    = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
     analise["_cliente_final"] = cliente_final
-    analise["_tipo_final"] = tipo_final
+    analise["_tipo_final"]    = tipo_final
+
+    # TRT: prioriza extração do número do processo se IA retornou N/A
+    trt = analise.get("trt", "N/A")
+    if not trt or trt == "N/A":
+        trt = extrair_trt_do_processo(analise.get("numero_processo", ""))
+    analise["trt"] = trt
+
     row = {
-        "DATA DO REGISTRO": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "ADVOGADO": sigla,
-        "TRT": analise.get("trt", ""),
-        "NUMERO DO PROCESSO": analise.get("numero_processo", ""),
-        "NOME DO RECLAMANTE": analise.get("nome_reclamante", ""),
-        "CLIENTE": cliente_final,
-        "TIPO DE RESPONSABILIDADE": tipo_final,
-        "TIPO DE DECISAO": analise.get("tipo_decisao", ""),
-        "RESULTADO DA DECISAO": analise.get("resultado_geral", ""),
-        "DATA DA DECISAO": analise.get("data_decisao", ""),
-        "ENTENDIMENTOS FAVORAVEIS": formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
-        "ENTENDIMENTOS DESFAVORAVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
-        "FUNDAMENTOS JURIDICOS": analise.get("fundamentos_juridicos", ""),
-        "VALOR DA CONDENACAO": analise.get("valor_condenacao", ""),
-        "RESUMO": analise.get("resumo_geral", ""),
-        "OBSERVACOES": analise.get("observacoes_precedente", ""),
+        "DATA DO REGISTRO":         datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "ADVOGADO":                  sigla,
+        "TRT":                       trt,
+        "NÚMERO DO PROCESSO":        analise.get("numero_processo", ""),
+        "NOME DO RECLAMANTE":        analise.get("nome_reclamante", ""),
+        "CLIENTE":                   cliente_final,
+        "TIPO DE RESPONSABILIDADE":  tipo_final,
+        "TIPO DE DECISÃO":           analise.get("tipo_decisao", ""),
+        "RESULTADO DA DECISÃO":      analise.get("resultado_geral", ""),
+        "DATA DA DECISÃO":           analise.get("data_decisao", ""),
+        "JUIZ/RELATOR":              analise.get("juiz_relator", ""),
+        "VARA/TURMA":                analise.get("vara_turma", ""),
+        "ENTENDIMENTOS FAVORÁVEIS":  formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
+        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
+        "FUNDAMENTOS JURÍDICOS":     analise.get("fundamentos_juridicos", ""),
+        "VALOR DA CONDENAÇÃO":       analise.get("valor_condenacao", ""),
+        "RESUMO":                    analise.get("resumo_geral", ""),
+        "OBSERVAÇÕES":               analise.get("observacoes_precedente", ""),
     }
+
     await salvar_decisao(row)
     return formatar_relatorio(analise, sigla)
 
 
 async def processar_texto(texto_pdf: str, advogado: str, texto: str) -> str:
-    """Processa texto já extraído do PDF pelo Apps Script via Google Drive."""
-    sigla = resolver_sigla(advogado)
-    hints = parse_mensagem(texto)
-
+    sigla  = resolver_sigla(advogado)
+    hints  = parse_mensagem(texto)
     if not texto_pdf.strip():
         return "⚠️ Não foi possível extrair texto do PDF."
-
     analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+    return await _montar_e_salvar(analise, sigla, hints)
 
-    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
-    tipo_final = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
-    analise["_cliente_final"] = cliente_final
-    analise["_tipo_final"] = tipo_final
 
-    row = {
-        "DATA DO REGISTRO": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "ADVOGADO": sigla,
-        "TRT": analise.get("trt", ""),
-        "NÚMERO DO PROCESSO": analise.get("numero_processo", ""),
-        "NOME DO RECLAMANTE": analise.get("nome_reclamante", ""),
-        "CLIENTE": cliente_final,
-        "TIPO DE RESPONSABILIDADE": tipo_final,
-        "TIPO DE DECISÃO": analise.get("tipo_decisao", ""),
-        "RESULTADO DA DECISÃO": analise.get("resultado_geral", ""),
-        "DATA DA DECISÃO": analise.get("data_decisao", ""),
-        "ENTENDIMENTOS FAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
-        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
-        "FUNDAMENTOS JURÍDICOS": analise.get("fundamentos_juridicos", ""),
-        "VALOR DA CONDENAÇÃO": analise.get("valor_condenacao", ""),
-        "RESUMO": analise.get("resumo_geral", ""),
-        "OBSERVAÇÕES": analise.get("observacoes_precedente", ""),
-    }
-
-    await salvar_decisao(row)
-    return formatar_relatorio(analise, sigla)
+async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str) -> str:
+    sigla      = resolver_sigla(advogado)
+    hints      = parse_mensagem(texto)
+    texto_pdf  = extrair_texto_pdf(pdf_bytes)
+    if not texto_pdf.strip():
+        return "⚠️ Não foi possível extrair texto do PDF."
+    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+    return await _montar_e_salvar(analise, sigla, hints)
 
 
 async def processar_pdf(pdf_url: str, advogado: str, texto: str) -> str:
-    sigla = resolver_sigla(advogado)
-    hints = parse_mensagem(texto)
-
-    pdf_bytes = await download_pdf(pdf_url)
-    texto_pdf = extrair_texto_pdf(pdf_bytes)
-
+    sigla      = resolver_sigla(advogado)
+    hints      = parse_mensagem(texto)
+    pdf_bytes  = await download_pdf(pdf_url)
+    texto_pdf  = extrair_texto_pdf(pdf_bytes)
     if not texto_pdf.strip():
-        return "⚠️ Não foi possível extrair texto do PDF (pode ser escaneado ou protegido)."
-
+        return "⚠️ Não foi possível extrair texto do PDF."
     analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
-
-    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
-    tipo_final = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
-    analise["_cliente_final"] = cliente_final
-    analise["_tipo_final"] = tipo_final
-
-    row = {
-        "DATA DO REGISTRO": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "ADVOGADO": sigla,
-        "TRT": analise.get("trt", ""),
-        "NÚMERO DO PROCESSO": analise.get("numero_processo", ""),
-        "NOME DO RECLAMANTE": analise.get("nome_reclamante", ""),
-        "CLIENTE": cliente_final,
-        "TIPO DE RESPONSABILIDADE": tipo_final,
-        "TIPO DE DECISÃO": analise.get("tipo_decisao", ""),
-        "RESULTADO DA DECISÃO": analise.get("resultado_geral", ""),
-        "DATA DA DECISÃO": analise.get("data_decisao", ""),
-        "ENTENDIMENTOS FAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
-        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
-        "FUNDAMENTOS JURÍDICOS": analise.get("fundamentos_juridicos", ""),
-        "VALOR DA CONDENAÇÃO": analise.get("valor_condenacao", ""),
-        "RESUMO": analise.get("resumo_geral", ""),
-        "OBSERVAÇÕES": analise.get("observacoes_precedente", ""),
-    }
-
-    await salvar_decisao(row)
-    return formatar_relatorio(analise, sigla)
+    return await _montar_e_salvar(analise, sigla, hints)
 
 
 # ---------------------------------------------------------------------------
@@ -372,24 +415,18 @@ Retorne APENAS JSON válido:
 async def processar_busca(tipo: str, tema: str) -> str:
     if not tema:
         return f"⚠️ Informe o tema. Exemplo: `/{tipo} vínculo empregatício`"
-
-    rows = await buscar_precedentes()
+    rows      = await buscar_precedentes()
     dados_str = json.dumps(rows, ensure_ascii=False)[:25000]
     tipo_label = "FAVORÁVEIS" if tipo == "favoraveis" else "DESFAVORÁVEIS"
-
-    prompt = PROMPT_BUSCA.format(tipo_label=tipo_label, tema=tema, dados=dados_str)
-    response = await claude.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    resultado = _parse_json(response.content[0].text)
+    prompt    = PROMPT_BUSCA.format(tipo_label=tipo_label, tema=tema, dados=dados_str)
+    raw       = await _chamar_ia(prompt)
+    resultado = _parse_json(raw)
     return _formatar_busca(resultado)
 
 
 def _formatar_busca(d: dict) -> str:
     tipo = (d.get("tipo") or "").upper()
-    r = f"🔍 *PRECEDENTES {tipo}*\n\n"
+    r  = f"🔍 *PRECEDENTES {tipo}*\n\n"
     r += f"📌 *Tema:* {d.get('tema_buscado', 'N/A')}\n"
     r += f"📊 *Encontrados:* {d.get('total_encontrados', 0)}\n\n"
     for i, p in enumerate(d.get("precedentes") or [], 1):
@@ -406,6 +443,8 @@ def _formatar_busca(d: dict) -> str:
 # AJUDA
 # ---------------------------------------------------------------------------
 
+FORM_LINK = "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform"
+
 def get_ajuda_card() -> dict:
     return {
         "cardId": "ajuda",
@@ -416,9 +455,10 @@ def get_ajuda_card() -> dict:
             },
             "sections": [
                 {
-                    "header": "📎 Postar uma decisão",
+                    "header": "📎 Registrar uma decisão",
                     "widgets": [
-                        {"textParagraph": {"text": "Envie o <b>PDF da decisão</b> no grupo. O bot analisa e registra automaticamente."}},
+                        {"textParagraph": {"text": "Acesse o formulário, anexe o PDF e envie:"}},
+                        {"textParagraph": {"text": f"<a href=\"{FORM_LINK}\">{FORM_LINK}</a>"}},
                         {"decoratedText": {"topLabel": "Cliente (opcional)", "text": "<font face=\"monospace\">Cliente: iFood</font>", "startIcon": {"knownIcon": "PERSON"}}},
                         {"decoratedText": {"topLabel": "Tipo (opcional)", "text": "<font face=\"monospace\">Tipo: OL</font>", "bottomLabel": "OL · Nuvem · Terceirização · Subsidiária · Ex Funcionário · Ex-Foodlovers · Marketplace", "startIcon": {"knownIcon": "BOOKMARK"}}},
                     ]
@@ -428,29 +468,35 @@ def get_ajuda_card() -> dict:
                     "widgets": [
                         {"decoratedText": {"text": "<font face=\"monospace\">/favoraveis [tema]</font>", "bottomLabel": "Ex: /favoraveis vínculo empregatício", "startIcon": {"knownIcon": "STAR"}}},
                         {"decoratedText": {"text": "<font face=\"monospace\">/desfavoraveis [tema]</font>", "bottomLabel": "Ex: /desfavoraveis responsabilidade subsidiária", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/link</font>", "bottomLabel": "Envia o link do formulário", "startIcon": {"knownIcon": "STAR"}}},
                         {"decoratedText": {"text": "<font face=\"monospace\">/ajuda</font>", "bottomLabel": "Exibe esta mensagem", "startIcon": {"knownIcon": "STAR"}}},
                     ]
                 }
             ]
         },
         "_fallback_text": (
-            "*Decisão FA Bot*\n\n"
-            "📎 Envie o PDF no grupo. Opcional: `Cliente: iFood` e `Tipo: OL`\n\n"
-            "🔍 `/favoraveis [tema]` · `/desfavoraveis [tema]` · `/ajuda`"
+            f"*Decisão FA Bot*\n\n"
+            f"📎 Registrar decisão: {FORM_LINK}\n\n"
+            f"🔍 `/favoraveis [tema]` · `/desfavoraveis [tema]` · `/link` · `/ajuda`"
         )
     }
 
 
 def get_ajuda() -> str:
     return (
-        "*Decisão FA Bot* — Como usar:\n\n"
-        "📎 *Postar uma decisão:*\n"
-        "Envie o PDF da decisão no grupo.\n"
-        "Opcionalmente inclua na mensagem:\n"
-        "  `Cliente: iFood`\n"
-        "  `Tipo: OL` _(OL, Nuvem, Terceirização, Subsidiária, Ex Funcionário, Ex-Foodlovers, Marketplace)_\n\n"
-        "🔍 *Buscar precedentes:*\n"
+        f"*Decisão FA Bot* — Como usar:\n\n"
+        f"📎 *Registrar decisão:*\n{FORM_LINK}\n\n"
+        f"🔍 *Buscar precedentes:*\n"
         "`/favoraveis vínculo empregatício`\n"
         "`/desfavoraveis responsabilidade subsidiária`\n"
+        "`/link` — Link do formulário\n"
         "`/ajuda` — Esta mensagem"
+    )
+
+
+def get_link() -> str:
+    return (
+        f"📎 *Link para registrar decisão:*\n\n"
+        f"{FORM_LINK}\n\n"
+        f"_Anexe o PDF, informe o cliente e tipo (opcionais) e envie._"
     )
