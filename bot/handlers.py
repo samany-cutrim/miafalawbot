@@ -199,28 +199,35 @@ async def _chamar_ia(prompt: str) -> str:
 
 PROMPT_ANALISE = """Você é especialista em decisões judiciais trabalhistas brasileiras.
 
+CONTEXTO IMPORTANTE:
+- Este escritório representa SEMPRE a empresa (reclamada/ré), nunca o trabalhador.
+- "Favorável" significa favorável À EMPRESA (ex: pedido negado, vínculo não reconhecido, condenação reduzida).
+- "Desfavorável" significa desfavorável À EMPRESA (ex: vínculo reconhecido, condenação imposta, recurso negado).
+- Os entendimentos favoráveis são teses que BENEFICIAM a empresa e podem ser usados como precedente.
+- Os entendimentos desfavoráveis são teses que PREJUDICAM a empresa e devem ser monitorados.
+
 Analise a decisão abaixo e retorne APENAS um JSON válido com os campos:
 {{
   "trt": "TRT-X ou N/A",
   "numero_processo": "0000000-00.0000.0.00.0000 ou N/A",
-  "nome_reclamante": "nome ou N/A",
-  "data_decisao": "DD/MM/AAAA ou N/A",
+  "nome_reclamante": "nome completo do reclamante/trabalhador ou N/A",
+  "data_decisao": "DD/MM/AAAA — busque no final do documento na assinatura ou cabeçalho ou N/A",
   "tipo_decisao": "Sentença ou Acórdão",
-  "resultado_geral": "Favorável ou Desfavorável ou Parcialmente Favorável",
-  "cliente_detectado": "nome do réu/reclamado principal ou N/A",
+  "resultado_geral": "Favorável ou Desfavorável ou Parcialmente Favorável — SEMPRE do ponto de vista da EMPRESA",
+  "cliente_detectado": "nome do réu/reclamado principal (a empresa) ou N/A",
   "tipo_responsabilidade_detectado": "OL ou Nuvem ou Terceirização ou Subsidiária ou Ex Funcionário ou Ex-Foodlovers ou Marketplace ou N/A",
-  "juiz_relator": "nome completo do juiz ou relator que assinou/proferiu a decisão ou N/A",
-  "vara_turma": "número da vara ou turma (ex: 2ª Vara do Trabalho, 3ª Turma) ou N/A",
-  "entendimentos_favoraveis": [{{"tema": "", "entendimento": ""}}],
-  "entendimentos_desfavoraveis": [{{"tema": "", "entendimento": ""}}],
-  "fundamentos_juridicos": "principais fundamentos citados",
-  "valor_condenacao": "R$ 0,00 ou N/A",
-  "resumo_geral": "resumo em 3-5 linhas",
-  "observacoes_precedente": "relevância como precedente"
+  "juiz_relator": "nome completo do juiz singular ou relator do acórdão que proferiu/assinou a decisão ou N/A",
+  "vara_turma": "ex: 2ª Vara do Trabalho de São Paulo, 3ª Turma do TST — extraia do cabeçalho ou rodapé ou N/A",
+  "entendimentos_favoraveis": [{{"tema": "tema jurídico", "entendimento": "tese favorável à empresa"}}],
+  "entendimentos_desfavoraveis": [{{"tema": "tema jurídico", "entendimento": "tese desfavorável à empresa"}}],
+  "fundamentos_juridicos": "artigos, súmulas e precedentes citados na decisão",
+  "valor_condenacao": "R$ 0,00 ou N/A — se favorável à empresa coloque N/A",
+  "resumo_geral": "resumo em 3-5 linhas do ponto de vista da empresa — o que foi decidido e como impacta a empresa",
+  "observacoes_precedente": "como esta decisão pode ser usada como precedente em outros casos pela empresa"
 }}
 
-CLIENTE INFORMADO PELO ADVOGADO: {cliente}
-TIPO INFORMADO PELO ADVOGADO: {tipo}
+CLIENTE (EMPRESA RECLAMADA) INFORMADO PELO ADVOGADO: {cliente}
+TIPO DE RESPONSABILIDADE INFORMADO PELO ADVOGADO: {tipo}
 
 DECISÃO:
 {texto}
@@ -385,7 +392,9 @@ async def processar_pdf(pdf_url: str, advogado: str, texto: str) -> str:
 
 PROMPT_BUSCA = """Você é especialista em direito trabalhista brasileiro.
 
-Busque nos dados abaixo precedentes {tipo_label} sobre o tema: "{tema}"
+CONTEXTO: Este escritório representa SEMPRE a empresa (reclamada). Precedentes favoráveis são decisões que beneficiaram a empresa. Precedentes desfavoráveis são decisões que prejudicaram a empresa.
+
+Busque nos dados abaixo precedentes {tipo_label} À EMPRESA sobre o tema: "{tema}"
 
 Dados da planilha:
 {dados}
@@ -407,8 +416,8 @@ Retorne APENAS JSON válido:
       "como_usar": str
     }}
   ],
-  "tese_consolidada": str,
-  "argumentos_principais": str
+  "tese_consolidada": "tese consolidada do ponto de vista da empresa para usar em defesa",
+  "argumentos_principais": "principais argumentos que a empresa pode usar baseado nestes precedentes"
 }}"""
 
 
