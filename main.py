@@ -174,4 +174,3 @@ async def _run_pdf(req: PdfRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
-
