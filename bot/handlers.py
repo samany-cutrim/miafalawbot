@@ -34,9 +34,19 @@ else:
     _gemini_ok = False
 
 # ---------------------------------------------------------------------------
-# SESSÕES PENDENTES — chave: nome do advogado, valor: dados para salvar
+# SESSÕES PENDENTES — chave: primeiro nome normalizado, valor: dados para salvar
 # ---------------------------------------------------------------------------
 _sessoes_pendentes: dict = {}
+
+
+def _chave_sessao(nome: str) -> str:
+    """Normaliza o nome para usar como chave de sessão.
+    Ex: 'Samany Cutrim' → 'samany', 'samany' → 'samany'
+    Garante que o nome do formulário e do Chat referenciem a mesma sessão.
+    """
+    if not nome:
+        return "advogado"
+    return nome.strip().lower().split()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -352,14 +362,15 @@ def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
 
 
 async def confirmar_sessao(advogado: str, webhook_url: str):
-    row = _sessoes_pendentes.get(advogado)
+    chave = _chave_sessao(advogado)
+    row = _sessoes_pendentes.get(chave)
     if not row:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para confirmar.")
         return
     try:
         row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
-        del _sessoes_pendentes[advogado]
+        del _sessoes_pendentes[chave]
         sigla = row.get("ADVOGADO", advogado)
         await send_webhook(
             webhook_url,
@@ -376,8 +387,9 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
 
 
 async def cancelar_sessao(advogado: str, webhook_url: str):
-    if advogado in _sessoes_pendentes:
-        del _sessoes_pendentes[advogado]
+    chave = _chave_sessao(advogado)
+    if chave in _sessoes_pendentes:
+        del _sessoes_pendentes[chave]
         await send_webhook(webhook_url, f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo.")
     else:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para cancelar.")
@@ -408,7 +420,8 @@ Mantenha todos os campos que não foram mencionados na correção."""
 
 
 async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
-    row = _sessoes_pendentes.get(advogado)
+    chave = _chave_sessao(advogado)
+    row = _sessoes_pendentes.get(chave)
     if not row:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para corrigir.")
         return
@@ -467,7 +480,7 @@ async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
         row_corrigido = _montar_row(analise_corrigida, sigla, hints)
         row_corrigido["_cliente_hint"] = hints["cliente"]
         row_corrigido["_tipo_hint"]    = hints["tipo"]
-        _sessoes_pendentes[advogado]   = row_corrigido
+        _sessoes_pendentes[chave]      = row_corrigido
 
         relatorio  = formatar_relatorio(analise_corrigida, sigla)
         confirmacao = mensagem_confirmacao(advogado)
@@ -507,8 +520,9 @@ async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhoo
     row = _montar_row(analise, sigla, hints)
     row["_cliente_hint"] = hints["cliente"]
     row["_tipo_hint"]    = hints["tipo"]
-    _sessoes_pendentes[advogado] = row
-    logger.info("Sessão pendente criada para %s", advogado)
+    chave = _chave_sessao(advogado)
+    _sessoes_pendentes[chave] = row
+    logger.info("Sessão pendente criada para %s (chave: %s)", advogado, chave)
 
     # Retorna relatório + instrução de confirmação
     relatorio = formatar_relatorio(analise, sigla)
