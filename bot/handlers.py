@@ -1,5 +1,6 @@
 """
-Handlers v3 — lógica de negócio.
+Handlers v3 — com confirmação humana antes de salvar na planilha.
+Sessões armazenadas em memória por advogado (chave = nome do advogado).
 """
 
 import io
@@ -7,12 +8,14 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import dict as Dict
 
 import anthropic
 import pdfplumber
 
 from bot.sheets import salvar_decisao, buscar_precedentes
 from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, COLUNAS
+from bot.webhook import send_webhook
 
 import httpx
 
@@ -32,12 +35,17 @@ if GEMINI_API_KEY:
 else:
     _gemini_ok = False
 
+# ---------------------------------------------------------------------------
+# SESSÕES PENDENTES — chave: nome do advogado, valor: dados para salvar
+# ---------------------------------------------------------------------------
+_sessoes_pendentes: dict = {}
+
 
 # ---------------------------------------------------------------------------
 # MAPA DE SIGLAS
 # ---------------------------------------------------------------------------
 
-SIGLAS: dict[str, str] = {
+SIGLAS: dict = {
     "Samany Cutrim":                      "SC",
     "samany":                             "SC",
     "Letícia Silva":                      "LSS",
@@ -63,25 +71,20 @@ SIGLAS: dict[str, str] = {
 def resolver_sigla(display_name: str) -> str:
     if not display_name:
         return "N/A"
-    # Correspondência exata
     if display_name in SIGLAS:
         return SIGLAS[display_name]
-    # Case-insensitive
     lower = display_name.strip().lower()
     for nome, sigla in SIGLAS.items():
         if nome.lower() == lower:
             return sigla
-    # Primeiro nome (ex: "Samany" → "SC")
     primeiro = lower.split()[0] if lower.split() else lower
     for nome, sigla in SIGLAS.items():
         if nome.lower().startswith(primeiro):
             return sigla
-    # Parcial
     for nome, sigla in SIGLAS.items():
         partes = nome.lower().split()
         if all(p in lower for p in partes[:2]):
             return sigla
-    # Fallback: iniciais
     partes = display_name.strip().split()
     sigla_auto = "".join(p[0].upper() for p in partes if p)
     logger.warning("Advogado '%s' não encontrado. Sigla: '%s'", display_name, sigla_auto)
@@ -136,25 +139,16 @@ async def download_pdf(url: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 def extrair_trt_do_processo(numero: str) -> str:
-    """
-    Número formato: 0000310-88.2024.5.05.0102
-    O TRT é o dígito após '5.' (posição 4 nos segmentos separados por ponto)
-    Ex: 2024.5.05.0102 → TRT 5
-    """
     if not numero or numero == "N/A":
         return "N/A"
     try:
-        # Remove espaços e busca padrão NNNNNN-NN.AAAA.J.TT.OOOO
-        m = re.search(r'\d{7}-\d{2}\.\d{4}\.(\d)\.(\d{2})\.\d{4}', numero)
-        if m:
-            justica = m.group(1)  # deve ser 5 (Justiça do Trabalho)
-            tribunal = m.group(2).lstrip("0")  # ex: "05" → "5"
-            if justica == "5":
-                return f"TRT-{tribunal}"
-        # Fallback: busca qualquer .5.XX.
+        m = re.search(r'\d+-\d+\.\d{4}\.(\d)\.(\d{2})\.\d+', numero)
+        if m and m.group(1) == "5":
+            tribunal = m.group(2).lstrip("0") or m.group(2)
+            return f"TRT-{tribunal}"
         m2 = re.search(r'\.5\.(\d{2})\.', numero)
         if m2:
-            tribunal = m2.group(1).lstrip("0")
+            tribunal = m2.group(1).lstrip("0") or m2.group(1)
             return f"TRT-{tribunal}"
     except Exception:
         pass
@@ -162,11 +156,10 @@ def extrair_trt_do_processo(numero: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CHAMADA À IA (Claude + fallback Gemini)
+# CHAMADA À IA
 # ---------------------------------------------------------------------------
 
 async def _chamar_ia(prompt: str) -> str:
-    # Tenta Claude
     if claude:
         try:
             response = await claude.messages.create(
@@ -179,7 +172,6 @@ async def _chamar_ia(prompt: str) -> str:
         except Exception as e:
             logger.warning("Claude falhou (%s). Tentando Gemini...", e)
 
-    # Fallback Gemini
     if _gemini_ok:
         try:
             import google.generativeai as genai
@@ -216,13 +208,13 @@ Analise a decisão abaixo e retorne APENAS um JSON válido com os campos:
   "resultado_geral": "Favorável ou Desfavorável ou Parcialmente Favorável — SEMPRE do ponto de vista da EMPRESA",
   "cliente_detectado": "nome do réu/reclamado principal (a empresa) ou N/A",
   "tipo_responsabilidade_detectado": "OL ou Nuvem ou Terceirização ou Subsidiária ou Ex Funcionário ou Ex-Foodlovers ou Marketplace ou N/A",
-  "juiz_relator": "nome completo do juiz singular ou relator do acórdão que proferiu/assinou a decisão ou N/A",
-  "vara_turma": "ex: 2ª Vara do Trabalho de São Paulo, 3ª Turma do TST — extraia do cabeçalho ou rodapé ou N/A",
+  "juiz_relator": "nome completo do juiz singular ou relator do acórdão ou N/A",
+  "vara_turma": "ex: 2ª Vara do Trabalho de São Paulo, 3ª Turma do TST ou N/A",
   "entendimentos_favoraveis": [{{"tema": "tema jurídico", "entendimento": "tese favorável à empresa"}}],
   "entendimentos_desfavoraveis": [{{"tema": "tema jurídico", "entendimento": "tese desfavorável à empresa"}}],
   "fundamentos_juridicos": "artigos, súmulas e precedentes citados na decisão",
   "valor_condenacao": "R$ 0,00 ou N/A — se favorável à empresa coloque N/A",
-  "resumo_geral": "resumo em 3-5 linhas do ponto de vista da empresa — o que foi decidido e como impacta a empresa",
+  "resumo_geral": "resumo em 3-5 linhas do ponto de vista da empresa",
   "observacoes_precedente": "como esta decisão pode ser usada como precedente em outros casos pela empresa"
 }}
 
@@ -268,7 +260,7 @@ def _parse_json(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def formatar_relatorio(d: dict, sigla: str) -> str:
-    r = "✅ *DECISÃO REGISTRADA*\n\n"
+    r = "✅ *ANÁLISE CONCLUÍDA — aguardando confirmação*\n\n"
     r += f"📋 *{d.get('tipo_decisao', 'N/A')}* — {d.get('resultado_geral', 'N/A')}\n"
     r += f"🏛️ *TRT:* {d.get('trt', 'N/A')}\n"
     r += f"📄 *Processo:* {d.get('numero_processo', 'N/A')}\n"
@@ -283,7 +275,7 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
 
     favs = d.get("entendimentos_favoraveis") or []
     if isinstance(favs, list) and favs:
-        r += "✅ *Favoráveis:*\n"
+        r += "✅ *Favoráveis (para a empresa):*\n"
         for i, e in enumerate(favs, 1):
             if isinstance(e, dict):
                 r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
@@ -291,7 +283,7 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
 
     desfavs = d.get("entendimentos_desfavoraveis") or []
     if isinstance(desfavs, list) and desfavs:
-        r += "❌ *Desfavoráveis:*\n"
+        r += "❌ *Desfavoráveis (para a empresa):*\n"
         for i, e in enumerate(desfavs, 1):
             if isinstance(e, dict):
                 r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
@@ -299,7 +291,7 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
 
     r += f"📚 *Fundamentos:* {d.get('fundamentos_juridicos', 'N/A')}\n"
     r += f"📌 *Observações:* {d.get('observacoes_precedente', 'N/A')}\n"
-    r += f"\n_Registrado por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
+    r += f"\n_Analisado por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
     return r
 
 
@@ -315,75 +307,230 @@ def formatar_entendimentos(lista: list) -> str:
     return " | ".join(partes)
 
 
+def mensagem_confirmacao(advogado: str) -> str:
+    return (
+        f"⚠️ *{advogado}, revise e confirme:*\n\n"
+        f"`/confirmar` — salva na planilha\n"
+        f"`/corrigir [instrução]` — corrige e reanalisa\n"
+        f"`/cancelar` — descarta\n\n"
+        f"_Exemplo: `/corrigir o resultado deve ser Desfavorável e o TRT é TRT-2`_"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SESSÕES — confirmar/cancelar
+# ---------------------------------------------------------------------------
+
+def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
+    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
+    tipo_final    = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
+
+    trt = analise.get("trt", "N/A")
+    if not trt or trt == "N/A":
+        trt = extrair_trt_do_processo(analise.get("numero_processo", ""))
+
+    return {
+        "DATA DO REGISTRO":           datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "ADVOGADO":                    sigla,
+        "TRT":                         trt,
+        "NÚMERO DO PROCESSO":          analise.get("numero_processo", ""),
+        "NOME DO RECLAMANTE":          analise.get("nome_reclamante", ""),
+        "CLIENTE":                     cliente_final,
+        "TIPO DE RESPONSABILIDADE":    tipo_final,
+        "TIPO DE DECISÃO":             analise.get("tipo_decisao", ""),
+        "RESULTADO DA DECISÃO":        analise.get("resultado_geral", ""),
+        "DATA DA DECISÃO":             analise.get("data_decisao", ""),
+        "JUIZ/RELATOR":                analise.get("juiz_relator", ""),
+        "VARA/TURMA":                  analise.get("vara_turma", ""),
+        "ENTENDIMENTOS FAVORÁVEIS":    formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
+        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
+        "FUNDAMENTOS JURÍDICOS":       analise.get("fundamentos_juridicos", ""),
+        "VALOR DA CONDENAÇÃO":         analise.get("valor_condenacao", ""),
+        "RESUMO":                      analise.get("resumo_geral", ""),
+        "OBSERVAÇÕES":                 analise.get("observacoes_precedente", ""),
+        "_cliente_final":              cliente_final,
+        "_tipo_final":                 tipo_final,
+    }
+
+
+async def confirmar_sessao(advogado: str, webhook_url: str):
+    row = _sessoes_pendentes.get(advogado)
+    if not row:
+        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para confirmar.")
+        return
+    try:
+        row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
+        await salvar_decisao(row_limpo)
+        del _sessoes_pendentes[advogado]
+        sigla = row.get("ADVOGADO", advogado)
+        await send_webhook(
+            webhook_url,
+            f"✅ *Decisão registrada com sucesso!*\n"
+            f"📄 *Processo:* {row.get('NÚMERO DO PROCESSO', 'N/A')}\n"
+            f"🏢 *Cliente:* {row.get('CLIENTE', 'N/A')}\n"
+            f"📊 *Resultado:* {row.get('RESULTADO DA DECISÃO', 'N/A')}\n"
+            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
+        )
+        logger.info("Sessão confirmada para %s", advogado)
+    except Exception as e:
+        logger.exception("Erro ao salvar sessão: %s", e)
+        await send_webhook(webhook_url, "⚠️ Erro ao salvar na planilha. Tente `/confirmar` novamente.")
+
+
+async def cancelar_sessao(advogado: str, webhook_url: str):
+    if advogado in _sessoes_pendentes:
+        del _sessoes_pendentes[advogado]
+        await send_webhook(webhook_url, f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo.")
+    else:
+        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para cancelar.")
+
+
+# ---------------------------------------------------------------------------
+# CORREÇÃO COM IA
+# ---------------------------------------------------------------------------
+
+PROMPT_CORRECAO = """Você é especialista em decisões judiciais trabalhistas brasileiras.
+
+CONTEXTO IMPORTANTE:
+- Este escritório representa SEMPRE a empresa (reclamada/ré), nunca o trabalhador.
+- "Favorável" significa favorável À EMPRESA.
+- "Desfavorável" significa desfavorável À EMPRESA.
+
+Abaixo está a análise atual de uma decisão judicial e uma instrução de correção do advogado.
+Aplique a correção e retorne a análise COMPLETA corrigida em JSON válido.
+
+ANÁLISE ATUAL:
+{analise_atual}
+
+INSTRUÇÃO DE CORREÇÃO DO ADVOGADO:
+{instrucao}
+
+Retorne APENAS o JSON completo corrigido com todos os campos, sem markdown, sem explicações.
+Mantenha todos os campos que não foram mencionados na correção."""
+
+
+async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
+    row = _sessoes_pendentes.get(advogado)
+    if not row:
+        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para corrigir.")
+        return
+
+    await send_webhook(webhook_url, f"✏️ *Aplicando correção...* Aguarde.")
+
+    try:
+        # Monta JSON da análise atual para passar à IA
+        analise_atual = {
+            "trt": row.get("TRT", ""),
+            "numero_processo": row.get("NÚMERO DO PROCESSO", ""),
+            "nome_reclamante": row.get("NOME DO RECLAMANTE", ""),
+            "data_decisao": row.get("DATA DA DECISÃO", ""),
+            "tipo_decisao": row.get("TIPO DE DECISÃO", ""),
+            "resultado_geral": row.get("RESULTADO DA DECISÃO", ""),
+            "cliente_detectado": row.get("CLIENTE", ""),
+            "tipo_responsabilidade_detectado": row.get("TIPO DE RESPONSABILIDADE", ""),
+            "juiz_relator": row.get("JUIZ/RELATOR", ""),
+            "vara_turma": row.get("VARA/TURMA", ""),
+            "entendimentos_favoraveis": row.get("ENTENDIMENTOS FAVORÁVEIS", ""),
+            "entendimentos_desfavoraveis": row.get("ENTENDIMENTOS DESFAVORÁVEIS", ""),
+            "fundamentos_juridicos": row.get("FUNDAMENTOS JURÍDICOS", ""),
+            "valor_condenacao": row.get("VALOR DA CONDENAÇÃO", ""),
+            "resumo_geral": row.get("RESUMO", ""),
+            "observacoes_precedente": row.get("OBSERVAÇÕES", ""),
+        }
+
+        prompt = PROMPT_CORRECAO.format(
+            analise_atual=json.dumps(analise_atual, ensure_ascii=False),
+            instrucao=instrucao
+        )
+
+        raw = await _chamar_ia(prompt)
+        analise_corrigida = _parse_json(raw)
+
+        # Preserva cliente/tipo informados pelo advogado (prioridade sobre IA)
+        hints = {
+            "cliente": row.get("_cliente_hint"),
+            "tipo": row.get("_tipo_hint"),
+        }
+
+        # Atualiza TRT se necessário
+        trt = analise_corrigida.get("trt", "N/A")
+        if not trt or trt == "N/A":
+            trt = extrair_trt_do_processo(analise_corrigida.get("numero_processo", ""))
+        analise_corrigida["trt"] = trt
+
+        cliente_final = hints["cliente"] or analise_corrigida.get("cliente_detectado") or "N/A"
+        tipo_final    = hints["tipo"] or analise_corrigida.get("tipo_responsabilidade_detectado") or "N/A"
+        analise_corrigida["_cliente_final"] = cliente_final
+        analise_corrigida["_tipo_final"]    = tipo_final
+
+        sigla = row.get("ADVOGADO", resolver_sigla(advogado))
+
+        # Atualiza sessão com dados corrigidos
+        row_corrigido = _montar_row(analise_corrigida, sigla, hints)
+        row_corrigido["_cliente_hint"] = hints["cliente"]
+        row_corrigido["_tipo_hint"]    = hints["tipo"]
+        _sessoes_pendentes[advogado]   = row_corrigido
+
+        relatorio  = formatar_relatorio(analise_corrigida, sigla)
+        confirmacao = mensagem_confirmacao(advogado)
+        await send_webhook(webhook_url, relatorio + "\n\n" + confirmacao)
+
+    except Exception as e:
+        logger.exception("Erro ao corrigir sessão: %s", e)
+        await send_webhook(webhook_url, "⚠️ Erro ao aplicar correção. Tente novamente.")
+
+
 # ---------------------------------------------------------------------------
 # HANDLERS PRINCIPAIS
 # ---------------------------------------------------------------------------
 
-async def _montar_e_salvar(analise: dict, sigla: str, hints: dict) -> str:
-    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
-    tipo_final    = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
-    analise["_cliente_final"] = cliente_final
-    analise["_tipo_final"]    = tipo_final
+async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhook_url: str) -> str:
+    sigla  = resolver_sigla(advogado)
+    hints  = parse_mensagem(texto)
 
-    # TRT: prioriza extração do número do processo se IA retornou N/A
+    if not texto_pdf.strip():
+        return "⚠️ Não foi possível extrair texto do PDF."
+
+    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+
+    # Atualiza TRT se necessário
     trt = analise.get("trt", "N/A")
     if not trt or trt == "N/A":
         trt = extrair_trt_do_processo(analise.get("numero_processo", ""))
     analise["trt"] = trt
 
-    row = {
-        "DATA DO REGISTRO":         datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "ADVOGADO":                  sigla,
-        "TRT":                       trt,
-        "NÚMERO DO PROCESSO":        analise.get("numero_processo", ""),
-        "NOME DO RECLAMANTE":        analise.get("nome_reclamante", ""),
-        "CLIENTE":                   cliente_final,
-        "TIPO DE RESPONSABILIDADE":  tipo_final,
-        "TIPO DE DECISÃO":           analise.get("tipo_decisao", ""),
-        "RESULTADO DA DECISÃO":      analise.get("resultado_geral", ""),
-        "DATA DA DECISÃO":           analise.get("data_decisao", ""),
-        "JUIZ/RELATOR":              analise.get("juiz_relator", ""),
-        "VARA/TURMA":                analise.get("vara_turma", ""),
-        "ENTENDIMENTOS FAVORÁVEIS":  formatar_entendimentos(analise.get("entendimentos_favoraveis", [])),
-        "ENTENDIMENTOS DESFAVORÁVEIS": formatar_entendimentos(analise.get("entendimentos_desfavoraveis", [])),
-        "FUNDAMENTOS JURÍDICOS":     analise.get("fundamentos_juridicos", ""),
-        "VALOR DA CONDENAÇÃO":       analise.get("valor_condenacao", ""),
-        "RESUMO":                    analise.get("resumo_geral", ""),
-        "OBSERVAÇÕES":               analise.get("observacoes_precedente", ""),
-    }
+    # Define cliente/tipo finais
+    cliente_final = hints["cliente"] or analise.get("cliente_detectado") or "N/A"
+    tipo_final    = hints["tipo"] or analise.get("tipo_responsabilidade_detectado") or "N/A"
+    analise["_cliente_final"] = cliente_final
+    analise["_tipo_final"]    = tipo_final
 
-    await salvar_decisao(row)
-    return formatar_relatorio(analise, sigla)
+    # Salva sessão pendente (preserva hints para reuso em correções)
+    row = _montar_row(analise, sigla, hints)
+    row["_cliente_hint"] = hints["cliente"]
+    row["_tipo_hint"]    = hints["tipo"]
+    _sessoes_pendentes[advogado] = row
+    logger.info("Sessão pendente criada para %s", advogado)
+
+    # Retorna relatório + instrução de confirmação
+    relatorio = formatar_relatorio(analise, sigla)
+    confirmacao = mensagem_confirmacao(advogado)
+    return relatorio + "\n\n" + confirmacao
 
 
-async def processar_texto(texto_pdf: str, advogado: str, texto: str) -> str:
-    sigla  = resolver_sigla(advogado)
-    hints  = parse_mensagem(texto)
-    if not texto_pdf.strip():
-        return "⚠️ Não foi possível extrair texto do PDF."
-    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
-    return await _montar_e_salvar(analise, sigla, hints)
+async def processar_texto(texto_pdf: str, advogado: str, texto: str, webhook_url: str) -> str:
+    return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url)
 
 
-async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str) -> str:
-    sigla      = resolver_sigla(advogado)
-    hints      = parse_mensagem(texto)
-    texto_pdf  = extrair_texto_pdf(pdf_bytes)
-    if not texto_pdf.strip():
-        return "⚠️ Não foi possível extrair texto do PDF."
-    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
-    return await _montar_e_salvar(analise, sigla, hints)
+async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str, webhook_url: str) -> str:
+    texto_pdf = extrair_texto_pdf(pdf_bytes)
+    return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url)
 
 
-async def processar_pdf(pdf_url: str, advogado: str, texto: str) -> str:
-    sigla      = resolver_sigla(advogado)
-    hints      = parse_mensagem(texto)
-    pdf_bytes  = await download_pdf(pdf_url)
-    texto_pdf  = extrair_texto_pdf(pdf_bytes)
-    if not texto_pdf.strip():
-        return "⚠️ Não foi possível extrair texto do PDF."
-    analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
-    return await _montar_e_salvar(analise, sigla, hints)
+async def processar_pdf(pdf_url: str, advogado: str, texto: str, webhook_url: str) -> str:
+    pdf_bytes = await download_pdf(pdf_url)
+    texto_pdf = extrair_texto_pdf(pdf_bytes)
+    return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url)
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +596,7 @@ def _formatar_busca(d: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# AJUDA
+# AJUDA / LINK
 # ---------------------------------------------------------------------------
 
 FORM_LINK = "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform"
@@ -468,8 +615,7 @@ def get_ajuda_card() -> dict:
                     "widgets": [
                         {"textParagraph": {"text": "Acesse o formulário, anexe o PDF e envie:"}},
                         {"textParagraph": {"text": f"<a href=\"{FORM_LINK}\">{FORM_LINK}</a>"}},
-                        {"decoratedText": {"topLabel": "Cliente (opcional)", "text": "<font face=\"monospace\">Cliente: iFood</font>", "startIcon": {"knownIcon": "PERSON"}}},
-                        {"decoratedText": {"topLabel": "Tipo (opcional)", "text": "<font face=\"monospace\">Tipo: OL</font>", "bottomLabel": "OL · Nuvem · Terceirização · Subsidiária · Ex Funcionário · Ex-Foodlovers · Marketplace", "startIcon": {"knownIcon": "BOOKMARK"}}},
+                        {"decoratedText": {"topLabel": "Após a análise, confirme ou cancele", "text": "<font face=\"monospace\">/confirmar</font> ou <font face=\"monospace\">/cancelar</font>", "startIcon": {"knownIcon": "BOOKMARK"}}},
                     ]
                 },
                 {
@@ -477,7 +623,9 @@ def get_ajuda_card() -> dict:
                     "widgets": [
                         {"decoratedText": {"text": "<font face=\"monospace\">/favoraveis [tema]</font>", "bottomLabel": "Ex: /favoraveis vínculo empregatício", "startIcon": {"knownIcon": "STAR"}}},
                         {"decoratedText": {"text": "<font face=\"monospace\">/desfavoraveis [tema]</font>", "bottomLabel": "Ex: /desfavoraveis responsabilidade subsidiária", "startIcon": {"knownIcon": "STAR"}}},
-                        {"decoratedText": {"text": "<font face=\"monospace\">/link</font>", "bottomLabel": "Envia o link do formulário", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/link</font>", "bottomLabel": "Link do formulário", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/confirmar</font>", "bottomLabel": "Confirma e salva a análise na planilha", "startIcon": {"knownIcon": "STAR"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/cancelar</font>", "bottomLabel": "Descarta a análise pendente", "startIcon": {"knownIcon": "STAR"}}},
                         {"decoratedText": {"text": "<font face=\"monospace\">/ajuda</font>", "bottomLabel": "Exibe esta mensagem", "startIcon": {"knownIcon": "STAR"}}},
                     ]
                 }
@@ -485,7 +633,8 @@ def get_ajuda_card() -> dict:
         },
         "_fallback_text": (
             f"*Decisão FA Bot*\n\n"
-            f"📎 Registrar decisão: {FORM_LINK}\n\n"
+            f"📎 Registrar: {FORM_LINK}\n\n"
+            f"Após análise: `/confirmar` para salvar · `/cancelar` para descartar\n\n"
             f"🔍 `/favoraveis [tema]` · `/desfavoraveis [tema]` · `/link` · `/ajuda`"
         )
     }
@@ -494,12 +643,14 @@ def get_ajuda_card() -> dict:
 def get_ajuda() -> str:
     return (
         f"*Decisão FA Bot* — Como usar:\n\n"
-        f"📎 *Registrar decisão:*\n{FORM_LINK}\n\n"
-        f"🔍 *Buscar precedentes:*\n"
-        "`/favoraveis vínculo empregatício`\n"
-        "`/desfavoraveis responsabilidade subsidiária`\n"
-        "`/link` — Link do formulário\n"
-        "`/ajuda` — Esta mensagem"
+        f"📎 *Registrar decisão:* {FORM_LINK}\n\n"
+        f"Após a análise:\n"
+        f"`/confirmar` — salva na planilha\n"
+        f"`/cancelar` — descarta\n\n"
+        f"🔍 *Buscar:*\n"
+        f"`/favoraveis [tema]`\n"
+        f"`/desfavoraveis [tema]`\n"
+        f"`/link` · `/ajuda`"
     )
 
 
