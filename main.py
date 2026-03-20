@@ -1,5 +1,6 @@
 """
 Decisões FA Bot v3 — Render + Google Apps Script + Google Forms
+Com confirmação humana antes de salvar na planilha.
 """
 
 import base64
@@ -12,7 +13,8 @@ from pydantic import BaseModel
 
 from bot.handlers import (
     processar_pdf, processar_pdf_bytes, processar_texto,
-    processar_busca, get_ajuda, get_ajuda_card, get_link
+    processar_busca, get_ajuda, get_ajuda_card, get_link,
+    confirmar_sessao, cancelar_sessao, corrigir_sessao
 )
 from bot.webhook import send_webhook, send_card
 
@@ -58,15 +60,27 @@ class AjudaRequest(BaseModel):
 class LinkRequest(BaseModel):
     webhook_url: str
 
+class ConfirmarRequest(BaseModel):
+    advogado: str
+    webhook_url: str
+
+class CancelarRequest(BaseModel):
+    advogado: str
+    webhook_url: str
+
+class CorrigirRequest(BaseModel):
+    advogado: str
+    instrucao: str
+    webhook_url: str
+
 
 # ---------------------------------------------------------------------------
-# ENDPOINTS SÍNCRONOS (respostas rápidas)
+# ENDPOINTS SÍNCRONOS
 # ---------------------------------------------------------------------------
 
 @app.post("/ajuda")
 async def ajuda(req: AjudaRequest):
-    card = get_ajuda_card()
-    await send_card(req.webhook_url, card)
+    await send_card(req.webhook_url, get_ajuda_card())
     return JSONResponse({"status": "ok"})
 
 
@@ -88,8 +102,26 @@ async def buscar(req: BuscaRequest):
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/confirmar")
+async def confirmar(req: ConfirmarRequest):
+    await confirmar_sessao(req.advogado, req.webhook_url)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/cancelar")
+async def cancelar(req: CancelarRequest):
+    await cancelar_sessao(req.advogado, req.webhook_url)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/corrigir")
+async def corrigir(req: CorrigirRequest, background_tasks: BackgroundTasks):
+    background_tasks.add_task(corrigir_sessao, req.advogado, req.instrucao, req.webhook_url)
+    return JSONResponse({"status": "corrigindo"})
+
+
 # ---------------------------------------------------------------------------
-# ENDPOINTS COM BACKGROUND (processamento demorado)
+# ENDPOINTS COM BACKGROUND
 # ---------------------------------------------------------------------------
 
 @app.post("/processar-texto")
@@ -112,7 +144,7 @@ async def processar(req: PdfRequest, background_tasks: BackgroundTasks):
 
 async def _run_texto(req: TextoRequest):
     try:
-        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto)
+        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, req.webhook_url)
         await send_webhook(req.webhook_url, resultado)
     except Exception as e:
         logger.exception("Erro ao processar texto: %s", e)
@@ -122,7 +154,7 @@ async def _run_texto(req: TextoRequest):
 async def _run_pdf_base64(req: PdfBase64Request):
     try:
         pdf_bytes = base64.b64decode(req.pdf_base64)
-        resultado = await processar_pdf_bytes(pdf_bytes, req.advogado, req.texto)
+        resultado = await processar_pdf_bytes(pdf_bytes, req.advogado, req.texto, req.webhook_url)
         await send_webhook(req.webhook_url, resultado)
     except Exception as e:
         logger.exception("Erro ao processar PDF base64: %s", e)
@@ -132,7 +164,7 @@ async def _run_pdf_base64(req: PdfBase64Request):
 async def _run_pdf(req: PdfRequest):
     try:
         await send_webhook(req.webhook_url, "⏳ Analisando decisão... Aguarde.")
-        resultado = await processar_pdf(req.pdf_url, req.advogado, req.texto)
+        resultado = await processar_pdf(req.pdf_url, req.advogado, req.texto, req.webhook_url)
         await send_webhook(req.webhook_url, resultado)
     except Exception as e:
         logger.exception("Erro ao processar PDF: %s", e)
