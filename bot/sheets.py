@@ -63,3 +63,66 @@ async def salvar_decisao(row: dict):
 async def buscar_precedentes() -> list[dict]:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _buscar_sync)
+
+
+# ---------------------------------------------------------------------------
+# SESSÕES PENDENTES — salvas numa aba oculta da planilha
+# ---------------------------------------------------------------------------
+
+SESSOES_ABA = "_sessoes_pendentes"
+
+
+def _carregar_sessoes_sync() -> dict:
+    try:
+        sh = _client().open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(SESSOES_ABA)
+        except gspread.WorksheetNotFound:
+            return {}
+        dados = ws.get_all_values()
+        if len(dados) < 2:
+            return {}
+        # Linha 1 = headers, demais = dados
+        # Formato: chave | json_dados
+        sessoes = {}
+        for row in dados[1:]:
+            if len(row) >= 2 and row[0]:
+                try:
+                    sessoes[row[0]] = json.loads(row[1])
+                except Exception:
+                    pass
+        return sessoes
+    except Exception as e:
+        logger.warning("Erro ao carregar sessões do Sheets: %s", e)
+        return {}
+
+
+def _salvar_sessoes_sync(sessoes: dict):
+    try:
+        sh = _client().open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(SESSOES_ABA)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title=SESSOES_ABA, rows=100, cols=2)
+
+        # Reconstrói a aba inteira
+        rows = [["chave", "dados"]]
+        for chave, dados in sessoes.items():
+            rows.append([chave, json.dumps(dados, ensure_ascii=False)])
+
+        ws.clear()
+        if rows:
+            ws.update(rows, value_input_option="RAW")
+        logger.info("Sessões salvas no Sheets: %d", len(sessoes))
+    except Exception as e:
+        logger.warning("Erro ao salvar sessões no Sheets: %s", e)
+
+
+async def carregar_sessoes() -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _carregar_sessoes_sync)
+
+
+async def salvar_sessoes(sessoes: dict):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _salvar_sessoes_sync, sessoes)
