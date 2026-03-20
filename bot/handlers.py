@@ -8,8 +8,6 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import dict as Dict
-
 import anthropic
 import pdfplumber
 
