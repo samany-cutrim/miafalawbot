@@ -11,7 +11,7 @@ from datetime import datetime
 import anthropic
 import pdfplumber
 
-from bot.sheets import salvar_decisao, buscar_precedentes
+from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
 from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, COLUNAS
 from bot.webhook import send_webhook
 
@@ -34,13 +34,8 @@ else:
     _gemini_ok = False
 
 # ---------------------------------------------------------------------------
-# SESSÕES PENDENTES — persistidas em arquivo JSON para sobreviver a restarts
+# SESSÕES PENDENTES — persistidas no Google Sheets para sobreviver a restarts
 # ---------------------------------------------------------------------------
-import os
-import tempfile
-
-_SESSOES_FILE = os.path.join(tempfile.gettempdir(), "decisoesfabot_sessoes.json")
-
 
 def _chave_sessao(nome: str) -> str:
     """Normaliza o nome para usar como chave de sessão.
@@ -49,24 +44,6 @@ def _chave_sessao(nome: str) -> str:
     if not nome:
         return "advogado"
     return nome.strip().lower().split()[0]
-
-
-def _carregar_sessoes() -> dict:
-    try:
-        if os.path.exists(_SESSOES_FILE):
-            with open(_SESSOES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning("Erro ao carregar sessões: %s", e)
-    return {}
-
-
-def _salvar_sessoes(sessoes: dict):
-    try:
-        with open(_SESSOES_FILE, "w", encoding="utf-8") as f:
-            json.dump(sessoes, f, ensure_ascii=False)
-    except Exception as e:
-        logger.warning("Erro ao salvar sessões: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +360,7 @@ def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
 
 async def confirmar_sessao(advogado: str, webhook_url: str):
     chave = _chave_sessao(advogado)
-    sessoes = _carregar_sessoes()
+    sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para confirmar.")
@@ -392,7 +369,7 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
         row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
         del sessoes[chave]
-        _salvar_sessoes(sessoes)
+        await salvar_sessoes(sessoes)
         sigla = row.get("ADVOGADO", advogado)
         await send_webhook(
             webhook_url,
@@ -410,10 +387,10 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
 
 async def cancelar_sessao(advogado: str, webhook_url: str):
     chave = _chave_sessao(advogado)
-    sessoes = _carregar_sessoes()
+    sessoes = await carregar_sessoes()
     if chave in sessoes:
         del sessoes[chave]
-        _salvar_sessoes(sessoes)
+        await salvar_sessoes(sessoes)
         await send_webhook(webhook_url, f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo.")
     else:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para cancelar.")
@@ -445,7 +422,7 @@ Mantenha todos os campos que não foram mencionados na correção."""
 
 async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
     chave = _chave_sessao(advogado)
-    sessoes = _carregar_sessoes()
+    sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para corrigir.")
@@ -506,7 +483,7 @@ async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
         row_corrigido["_cliente_hint"] = hints["cliente"]
         row_corrigido["_tipo_hint"]    = hints["tipo"]
         sessoes[chave] = row_corrigido
-        _salvar_sessoes(sessoes)
+        await salvar_sessoes(sessoes)
 
         relatorio  = formatar_relatorio(analise_corrigida, sigla)
         confirmacao = mensagem_confirmacao(advogado)
@@ -547,9 +524,9 @@ async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhoo
     row["_cliente_hint"] = hints["cliente"]
     row["_tipo_hint"]    = hints["tipo"]
     chave = _chave_sessao(advogado)
-    sessoes = _carregar_sessoes()
+    sessoes = await carregar_sessoes()
     sessoes[chave] = row
-    _salvar_sessoes(sessoes)
+    await salvar_sessoes(sessoes)
     logger.info("Sessão pendente criada para %s (chave: %s)", advogado, chave)
 
     # Retorna relatório + instrução de confirmação
