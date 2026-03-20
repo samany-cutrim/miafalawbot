@@ -174,9 +174,3 @@ async def _run_pdf(req: PdfRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
-
-
-@app.get("/debug-sessoes")
-async def debug_sessoes():
-    from bot.handlers import _carregar_sessoes
-    return _carregar_sessoes()
