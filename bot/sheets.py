@@ -39,16 +39,6 @@ def _salvar_sync(row: dict):
     ws.append_row(valores, value_input_option="USER_ENTERED")
     logger.info("Salvo em Precedentes: %s", row.get("NÚMERO DO PROCESSO"))
 
-    cliente = row.get("CLIENTE", "Geral")
-    try:
-        ws_cli = sh.worksheet(cliente)
-    except gspread.WorksheetNotFound:
-        ws_cli = sh.add_worksheet(title=cliente, rows=1000, cols=len(COLUNAS))
-        ws_cli.append_row(COLUNAS, value_input_option="USER_ENTERED")
-        logger.info("Aba '%s' criada.", cliente)
-    ws_cli.append_row(valores, value_input_option="USER_ENTERED")
-    logger.info("Salvo na aba '%s'.", cliente)
-
 
 def _buscar_sync() -> list[dict]:
     sh = _client().open_by_key(SPREADSHEET_ID)
