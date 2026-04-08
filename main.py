@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from bot.handlers import (
     processar_pdf, processar_pdf_bytes, processar_texto,
     processar_busca, get_ajuda, get_ajuda_card, get_link,
-    confirmar_sessao, cancelar_sessao, corrigir_sessao
+    confirmar_sessao, cancelar_sessao, corrigir_sessao,
+    gerar_email_sessao, dispensar_email_sessao
 )
 from bot.webhook import send_webhook, send_card
 
@@ -73,6 +74,14 @@ class CorrigirRequest(BaseModel):
     instrucao: str
     webhook_url: str
 
+class SimRequest(BaseModel):
+    advogado: str
+    webhook_url: str
+
+class NaoRequest(BaseModel):
+    advogado: str
+    webhook_url: str
+
 
 # ---------------------------------------------------------------------------
 # ENDPOINTS SÍNCRONOS
@@ -118,6 +127,18 @@ async def cancelar(req: CancelarRequest):
 async def corrigir(req: CorrigirRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(corrigir_sessao, req.advogado, req.instrucao, req.webhook_url)
     return JSONResponse({"status": "corrigindo"})
+
+
+@app.post("/sim")
+async def sim(req: SimRequest, background_tasks: BackgroundTasks):
+    background_tasks.add_task(gerar_email_sessao, req.advogado, req.webhook_url)
+    return JSONResponse({"status": "gerando_email"})
+
+
+@app.post("/nao")
+async def nao(req: NaoRequest):
+    await dispensar_email_sessao(req.advogado, req.webhook_url)
+    return JSONResponse({"status": "ok"})
 
 
 # ---------------------------------------------------------------------------
