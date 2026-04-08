@@ -368,8 +368,16 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
     try:
         row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
+
+        # Preserva os dados da decisão para possível geração de e-mail
+        dados_email = {k: v for k, v in row.items()}
         del sessoes[chave]
+
+        # Armazena estado aguardando resposta de e-mail
+        chave_email = f"email_{chave}"
+        sessoes[chave_email] = dados_email
         await salvar_sessoes(sessoes)
+
         sigla = row.get("ADVOGADO", advogado)
         await send_webhook(
             webhook_url,
@@ -380,6 +388,15 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
             f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
         )
         logger.info("Sessão confirmada para %s", advogado)
+
+        # Pergunta se deseja sugestão de e-mail
+        await send_webhook(
+            webhook_url,
+            f"📧 *{advogado}, deseja uma sugestão de e-mail de reporte ao cliente?*\n\n"
+            f"`/sim` — gerar sugestão de e-mail\n"
+            f"`/nao` — dispensar"
+        )
+
     except Exception as e:
         logger.exception("Erro ao salvar sessão: %s", e)
         await send_webhook(webhook_url, "⚠️ Erro ao salvar na planilha. Tente `/confirmar` novamente.")
@@ -394,6 +411,130 @@ async def cancelar_sessao(advogado: str, webhook_url: str):
         await send_webhook(webhook_url, f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo.")
     else:
         await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para cancelar.")
+
+
+# ---------------------------------------------------------------------------
+# GERAÇÃO DE E-MAIL — /sim e /nao
+# ---------------------------------------------------------------------------
+
+PROMPT_EMAIL = """Você é especialista em comunicação jurídica trabalhista brasileira.
+
+Redija um e-mail profissional de reporte de decisão judicial para o cliente, com base nos dados abaixo.
+O escritório representa SEMPRE a empresa (reclamada). A comunicação deve ser clara, objetiva e tranquilizadora (ou realista quando desfavorável).
+
+DADOS DA DECISÃO:
+- Tipo de decisão: {tipo_decisao}
+- Resultado: {resultado} (do ponto de vista da empresa)
+- Número do processo: {numero_processo}
+- Reclamante: {reclamante}
+- Cliente (empresa): {cliente}
+- Data da decisão: {data_decisao}
+- Vara/Turma: {vara_turma}
+- Valor da condenação: {valor_condenacao}
+- Resumo: {resumo}
+- Entendimentos favoráveis: {favoraveis}
+- Entendimentos desfavoráveis: {desfavoraveis}
+- Observações/Precedente: {observacoes}
+
+INSTRUÇÕES PARA O E-MAIL:
+1. Assunto já definido (não altere): {assunto}
+2. Cumprimente o cliente formalmente.
+3. Informe o resultado da decisão de forma clara.
+4. Destaque os principais pontos da decisão.
+5. Explique as estratégias que o escritório adotará a partir desta decisão.
+6. Indique os próximos passos processuais.
+7. Informe o valor da condenação (se houver), as custas processuais estimadas, e o valor do depósito recursal necessário (ou mencione que o juízo já está garantido, se aplicável). Caso não haja condenação (decisão favorável), informe isso claramente.
+8. Finalize de forma profissional, colocando-se à disposição para dúvidas.
+
+Retorne APENAS o corpo do e-mail (sem o assunto), em texto corrido, formatado em português formal, sem markdown, sem asteriscos.
+O e-mail deve ter no máximo 400 palavras."""
+
+
+def _montar_assunto_email(row: dict) -> str:
+    tipo_decisao = row.get("TIPO DE DECISÃO", "Decisão").upper()
+    resultado = row.get("RESULTADO DA DECISÃO", "")
+    numero_processo = row.get("NÚMERO DO PROCESSO", "N/A")
+    reclamante = row.get("NOME DO RECLAMANTE", "N/A")
+
+    resultado_upper = resultado.upper()
+    if "PARCIALMENTE" in resultado_upper:
+        resultado_label = "PARCIALMENTE FAVORÁVEL"
+    elif "DESFAVORÁVEL" in resultado_upper or "DESFAVORAVEL" in resultado_upper:
+        resultado_label = "DESFAVORÁVEL"
+    else:
+        resultado_label = "FAVORÁVEL"
+
+    return f"{tipo_decisao} – {resultado_label} – PROC Nº {numero_processo} – RECLAMANTE: {reclamante}"
+
+
+async def gerar_email_sessao(advogado: str, webhook_url: str):
+    """Handler para /sim — gera o e-mail de reporte ao cliente."""
+    chave = _chave_sessao(advogado)
+    chave_email = f"email_{chave}"
+    sessoes = await carregar_sessoes()
+    row = sessoes.get(chave_email)
+
+    if not row:
+        await send_webhook(
+            webhook_url,
+            f"⚠️ *{advogado}*, não há decisão recente para gerar o e-mail.\n"
+            f"Confirme uma decisão com `/confirmar` primeiro."
+        )
+        return
+
+    await send_webhook(webhook_url, "✉️ *Gerando sugestão de e-mail...* Aguarde.")
+
+    try:
+        assunto = _montar_assunto_email(row)
+
+        prompt = PROMPT_EMAIL.format(
+            tipo_decisao=row.get("TIPO DE DECISÃO", "N/A"),
+            resultado=row.get("RESULTADO DA DECISÃO", "N/A"),
+            numero_processo=row.get("NÚMERO DO PROCESSO", "N/A"),
+            reclamante=row.get("NOME DO RECLAMANTE", "N/A"),
+            cliente=row.get("CLIENTE", "N/A"),
+            data_decisao=row.get("DATA DA DECISÃO", "N/A"),
+            vara_turma=row.get("VARA/TURMA", "N/A"),
+            valor_condenacao=row.get("VALOR DA CONDENAÇÃO", "N/A"),
+            resumo=row.get("RESUMO", "N/A"),
+            favoraveis=row.get("ENTENDIMENTOS FAVORÁVEIS", "N/A") or "Nenhum",
+            desfavoraveis=row.get("ENTENDIMENTOS DESFAVORÁVEIS", "N/A") or "Nenhum",
+            observacoes=row.get("OBSERVAÇÕES", "N/A"),
+            assunto=assunto,
+        )
+
+        corpo_email = await _chamar_ia(prompt)
+
+        del sessoes[chave_email]
+        await salvar_sessoes(sessoes)
+
+        mensagem = (
+            f"📧 *SUGESTÃO DE E-MAIL*\n\n"
+            f"*Assunto:* {assunto}\n\n"
+            f"{'─' * 40}\n\n"
+            f"{corpo_email.strip()}\n\n"
+            f"{'─' * 40}\n"
+            f"_Sugestão gerada automaticamente. Revise antes de enviar._"
+        )
+        await send_webhook(webhook_url, mensagem)
+        logger.info("E-mail gerado para %s", advogado)
+
+    except Exception as e:
+        logger.exception("Erro ao gerar e-mail: %s", e)
+        await send_webhook(webhook_url, "⚠️ Erro ao gerar o e-mail. Tente `/sim` novamente.")
+
+
+async def dispensar_email_sessao(advogado: str, webhook_url: str):
+    """Handler para /nao — descarta a oferta de e-mail."""
+    chave = _chave_sessao(advogado)
+    chave_email = f"email_{chave}"
+    sessoes = await carregar_sessoes()
+
+    if chave_email in sessoes:
+        del sessoes[chave_email]
+        await salvar_sessoes(sessoes)
+
+    await send_webhook(webhook_url, f"👍 *{advogado}*, tudo certo! E-mail dispensado.")
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +777,13 @@ def get_ajuda_card() -> dict:
                     ]
                 },
                 {
+                    "header": "📧 E-mail de reporte ao cliente",
+                    "widgets": [
+                        {"decoratedText": {"text": "<font face=\"monospace\">/sim</font>", "bottomLabel": "Gera sugestão de e-mail após /confirmar", "startIcon": {"knownIcon": "EMAIL"}}},
+                        {"decoratedText": {"text": "<font face=\"monospace\">/nao</font>", "bottomLabel": "Dispensa a sugestão de e-mail", "startIcon": {"knownIcon": "EMAIL"}}},
+                    ]
+                },
+                {
                     "header": "🔍 Buscar precedentes",
                     "widgets": [
                         {"decoratedText": {"text": "<font face=\"monospace\">/favoraveis [tema]</font>", "bottomLabel": "Ex: /favoraveis vínculo empregatício", "startIcon": {"knownIcon": "STAR"}}},
@@ -651,7 +799,8 @@ def get_ajuda_card() -> dict:
         "_fallback_text": (
             f"*Decisão FA Bot*\n\n"
             f"📎 Registrar: {FORM_LINK}\n\n"
-            f"Após análise: `/confirmar` para salvar · `/cancelar` para descartar\n\n"
+            f"Após análise: `/confirmar` para salvar · `/cancelar` para descartar\n"
+            f"Após confirmar: `/sim` para e-mail de reporte · `/nao` para dispensar\n\n"
             f"🔍 `/favoraveis [tema]` · `/desfavoraveis [tema]` · `/link` · `/ajuda`"
         )
     }
@@ -664,6 +813,9 @@ def get_ajuda() -> str:
         f"Após a análise:\n"
         f"`/confirmar` — salva na planilha\n"
         f"`/cancelar` — descarta\n\n"
+        f"📧 *Após confirmar:*\n"
+        f"`/sim` — gera sugestão de e-mail de reporte ao cliente\n"
+        f"`/nao` — dispensa o e-mail\n\n"
         f"🔍 *Buscar:*\n"
         f"`/favoraveis [tema]`\n"
         f"`/desfavoraveis [tema]`\n"
