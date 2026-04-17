@@ -28,9 +28,12 @@ if GEMINI_API_KEY:
         import google.generativeai as genai
         genai.configure(api_key=GEMINI_API_KEY)
         _gemini_ok = True
-    except Exception:
+        logger.info("Gemini inicializado com sucesso.")
+    except Exception as e:
+        logger.error("Falha ao inicializar Gemini: %s", e)
         _gemini_ok = False
 else:
+    logger.warning("GEMINI_API_KEY não configurada.")
     _gemini_ok = False
 
 # ---------------------------------------------------------------------------
