@@ -195,14 +195,18 @@ _GEMINI_MODELS = [
     "gemini-2.0-flash",
 ]
 
-# Modelos via GitHub Copilot (models.inference.ai.azure.com)
+# Modelos via GitHub Copilot Pro (models.inference.ai.azure.com)
+# Limite de input: ~8000 tokens ≈ 24000 chars
 _GITHUB_MODELS = [
-    "claude-3.5-haiku",
-    "claude-3.5-sonnet",
-    "claude-3.7-sonnet",
-    "gpt-4o",
-    "gpt-4o-mini",
+    "claude-haiku-4-5",              # rápido e eficiente
+    "claude-sonnet-4-5",             # equilibrado
+    "claude-sonnet-4",               # capaz
+    "claude-sonnet-4-6",             # mais recente
+    "gpt-4o",                        # OpenAI fallback
+    "gpt-5-mini",                    # OpenAI leve
+    "gemini-3-flash",                # Google fallback
 ]
+_GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
 async def _chamar_ia(prompt: str) -> str:
     if claude:
@@ -230,12 +234,16 @@ async def _chamar_ia(prompt: str) -> str:
                 logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     if _copilot_ok and _copilot:
+        # Trunca o prompt para não exceder o limite de tokens do endpoint
+        prompt_github = prompt[:_GITHUB_MAX_CHARS] if len(prompt) > _GITHUB_MAX_CHARS else prompt
+        if len(prompt) > _GITHUB_MAX_CHARS:
+            logger.warning("Prompt truncado de %d para %d chars para GitHub Copilot.", len(prompt), _GITHUB_MAX_CHARS)
         for model_name in _GITHUB_MODELS:
             try:
                 response = await _copilot.chat.completions.create(
                     model=model_name,
                     max_tokens=4096,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[{"role": "user", "content": prompt_github}],
                 )
                 logger.info("IA: GitHub Copilot respondeu com modelo %s.", model_name)
                 return response.choices[0].message.content or ""
