@@ -3,6 +3,7 @@ Handlers v3 — com confirmação humana antes de salvar na planilha.
 Sessões armazenadas em memória por advogado (chave = nome do advogado).
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -12,7 +13,7 @@ import anthropic
 import pdfplumber
 
 from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
-from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, COLUNAS
+from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GITHUB_TOKEN, COLUNAS
 from bot.webhook import send_webhook
 
 import httpx
@@ -35,6 +36,9 @@ if GEMINI_API_KEY:
 else:
     logger.warning("GEMINI_API_KEY não configurada.")
     _gemini_ok = False
+
+# GitHub Models fallback (Claude gratuito via GitHub Copilot)
+_github_ok = bool(GITHUB_TOKEN)
 
 # ---------------------------------------------------------------------------
 # SESSÕES PENDENTES — persistidas no Google Sheets para sobreviver a restarts
@@ -175,14 +179,19 @@ _CLAUDE_MODELS = [
     "claude-3-opus-20240229",        # mais poderoso
 ]
 
-# Modelos Gemini em ordem de preferência (gratuitos primeiro)
+# Modelos Gemini disponíveis (API v1beta atual)
 _GEMINI_MODELS = [
-    "gemini-2.0-flash-lite",         # gratuito - mais leve
-    "gemini-2.0-flash",              # gratuito - rápido
-    "gemini-2.0-flash-exp",          # gratuito - experimental
-    "gemini-1.5-flash-8b",           # gratuito - compacto
-    "gemini-1.5-flash",              # gratuito - padrão
-    "gemini-1.5-pro",                # pago - mais poderoso
+    "gemini-2.0-flash-lite",         # mais leve
+    "gemini-2.0-flash",              # rápido
+    "gemini-2.5-flash-preview-04-17", # preview mais recente
+    "gemini-2.5-pro-preview-03-25",  # mais poderoso
+]
+
+# Modelos Claude disponíveis via GitHub Models (gratuitos)
+_GITHUB_MODELS = [
+    "claude-3-5-sonnet",
+    "claude-3-5-haiku",
+    "claude-3-7-sonnet",
 ]
 
 async def _chamar_ia(prompt: str) -> str:
@@ -208,11 +217,46 @@ async def _chamar_ia(prompt: str) -> str:
                 logger.info("IA: Gemini respondeu com modelo %s.", model_name)
                 return response.text
             except Exception as e:
-                logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
+                err_str = str(e)
+                if "429" in err_str and "retry_delay" in err_str:
+                    import re as _re
+                    m = _re.search(r'seconds:\s*(\d+)', err_str)
+                    wait = int(m.group(1)) + 2 if m else 35
+                    logger.warning("Gemini modelo %s rate limit, aguardando %ss...", model_name, wait)
+                    await asyncio.sleep(wait)
+                    try:
+                        response = model.generate_content(prompt)
+                        logger.info("IA: Gemini respondeu após retry com modelo %s.", model_name)
+                        return response.text
+                    except Exception as e2:
+                        logger.warning("Gemini modelo %s falhou após retry (%s). Tentando próximo...", model_name, e2)
+                else:
+                    logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
-        raise RuntimeError("Todos os modelos Gemini falharam.")
+    if _github_ok:
+        for model_name in _GITHUB_MODELS:
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://models.inference.ai.azure.com/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {GITHUB_TOKEN}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model_name,
+                            "max_tokens": 4096,
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    logger.info("IA: GitHub Models respondeu com modelo %s.", model_name)
+                    return data["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.warning("GitHub Models modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
-    raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY ou GEMINI_API_KEY.")
+    raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY, GEMINI_API_KEY ou GITHUB_TOKEN.")
 
 
 # ---------------------------------------------------------------------------

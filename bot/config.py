@@ -7,6 +7,7 @@ import tempfile
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
+GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
 
 _sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
