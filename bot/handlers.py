@@ -171,27 +171,23 @@ def extrair_trt_do_processo(numero: str) -> str:
 # CHAMADA À IA
 # ---------------------------------------------------------------------------
 
-# Modelos Claude em ordem de preferência (do mais leve/barato ao mais pesado)
+# Modelos Claude (pago - fallback rápido)
 _CLAUDE_MODELS = [
-    "claude-3-haiku-20240307",       # mais barato
-    "claude-3-5-haiku-20241022",     # barato + capaz
-    "claude-3-5-sonnet-20241022",    # equilibrado
-    "claude-3-opus-20240229",        # mais poderoso
+    "claude-3-haiku-20240307",
+    "claude-3-5-haiku-20241022",
 ]
 
-# Modelos Gemini disponíveis (API v1beta atual)
+# Modelos Gemini (gratuitos)
 _GEMINI_MODELS = [
-    "gemini-2.0-flash-lite",         # mais leve
-    "gemini-2.0-flash",              # rápido
-    "gemini-2.5-flash",              # flash mais recente
-    "gemini-2.5-pro",                # mais poderoso
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
 ]
 
-# Modelos Claude disponíveis via GitHub Models (gratuitos)
+# Modelos Claude via GitHub Models (gratuitos)
 _GITHUB_MODELS = [
-    "claude-3-5-sonnet",
-    "claude-3-5-haiku",
-    "claude-3-7-sonnet",
+    "claude-3-5-haiku-20241022",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-7-sonnet-20250219",
 ]
 
 async def _chamar_ia(prompt: str) -> str:
@@ -249,7 +245,10 @@ async def _chamar_ia(prompt: str) -> str:
                             "messages": [{"role": "user", "content": prompt}],
                         },
                     )
-                    resp.raise_for_status()
+                    if resp.status_code != 200:
+                        body = resp.text
+                        logger.warning("GitHub Models modelo %s HTTP %s: %s", model_name, resp.status_code, body)
+                        resp.raise_for_status()
                     data = resp.json()
                     logger.info("IA: GitHub Models respondeu com modelo %s.", model_name)
                     return data["choices"][0]["message"]["content"]
