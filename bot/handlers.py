@@ -37,8 +37,20 @@ else:
     logger.warning("GEMINI_API_KEY não configurada.")
     _gemini_ok = False
 
-# GitHub Models fallback (Claude gratuito via GitHub Copilot)
-_github_ok = bool(GITHUB_TOKEN)
+# GitHub Copilot fallback (via openai SDK — igual ao revisorfalaw)
+_copilot = None
+_copilot_ok = False
+if GITHUB_TOKEN:
+    try:
+        from openai import AsyncOpenAI
+        _copilot = AsyncOpenAI(
+            api_key=GITHUB_TOKEN,
+            base_url="https://models.inference.ai.azure.com",
+        )
+        _copilot_ok = True
+        logger.info("GitHub Copilot (openai SDK) inicializado com sucesso.")
+    except Exception as e:
+        logger.error("Falha ao inicializar GitHub Copilot: %s", e)
 
 # ---------------------------------------------------------------------------
 # SESSÕES PENDENTES — persistidas no Google Sheets para sobreviver a restarts
@@ -183,11 +195,13 @@ _GEMINI_MODELS = [
     "gemini-2.0-flash",
 ]
 
-# Modelos Claude via GitHub Models (gratuitos)
+# Modelos via GitHub Copilot (models.inference.ai.azure.com)
 _GITHUB_MODELS = [
-    "claude-3-5-haiku",
-    "claude-3-5-sonnet",
-    "claude-3-7-sonnet",
+    "claude-3.5-haiku",
+    "claude-3.5-sonnet",
+    "claude-3.7-sonnet",
+    "gpt-4o",
+    "gpt-4o-mini",
 ]
 
 async def _chamar_ia(prompt: str) -> str:
@@ -215,31 +229,18 @@ async def _chamar_ia(prompt: str) -> str:
             except Exception as e:
                 logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
-    if _github_ok:
+    if _copilot_ok and _copilot:
         for model_name in _GITHUB_MODELS:
             try:
-                async with httpx.AsyncClient(timeout=60) as client:
-                    resp = await client.post(
-                        "https://models.inference.ai.azure.com/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {GITHUB_TOKEN}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": model_name,
-                            "max_tokens": 4096,
-                            "messages": [{"role": "user", "content": prompt}],
-                        },
-                    )
-                    if resp.status_code != 200:
-                        body = resp.text
-                        logger.warning("GitHub Models modelo %s HTTP %s: %s", model_name, resp.status_code, body)
-                        resp.raise_for_status()
-                    data = resp.json()
-                    logger.info("IA: GitHub Models respondeu com modelo %s.", model_name)
-                    return data["choices"][0]["message"]["content"]
+                response = await _copilot.chat.completions.create(
+                    model=model_name,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                logger.info("IA: GitHub Copilot respondeu com modelo %s.", model_name)
+                return response.choices[0].message.content or ""
             except Exception as e:
-                logger.warning("GitHub Models modelo %s falhou (%s). Tentando próximo...", model_name, e)
+                logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY, GEMINI_API_KEY ou GITHUB_TOKEN.")
 
