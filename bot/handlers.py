@@ -198,13 +198,11 @@ _GEMINI_MODELS = [
 # Modelos via GitHub Copilot Pro (models.inference.ai.azure.com)
 # Limite de input: ~8000 tokens ≈ 24000 chars
 _GITHUB_MODELS = [
-    "claude-haiku-4-5",              # rápido e eficiente
-    "claude-sonnet-4-5",             # equilibrado
-    "claude-sonnet-4",               # capaz
-    "claude-sonnet-4-6",             # mais recente
-    "gpt-4o",                        # OpenAI fallback
-    "gpt-5-mini",                    # OpenAI leve
-    "gemini-3-flash",                # Google fallback
+    "claude-3.7-sonnet",
+    "claude-3.5-sonnet",
+    "claude-3.5-haiku",
+    "gpt-4o",
+    "gpt-4o-mini",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 

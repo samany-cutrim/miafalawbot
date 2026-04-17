@@ -18,6 +18,7 @@ from bot.handlers import (
     gerar_email_sessao, dispensar_email_sessao
 )
 from bot.webhook import send_webhook, send_card
+from bot.config import GITHUB_TOKEN
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -195,3 +196,21 @@ async def _run_pdf(req: PdfRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
+
+
+@app.get("/debug-models")
+async def debug_models():
+    """Endpoint temporário para listar modelos disponíveis no GitHub Copilot."""
+    if not GITHUB_TOKEN:
+        return JSONResponse({"error": "GITHUB_TOKEN não configurado"}, status_code=400)
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=GITHUB_TOKEN,
+            base_url="https://models.inference.ai.azure.com",
+        )
+        models = await client.models.list()
+        ids = sorted([m.id for m in models.data])
+        return {"total": len(ids), "models": ids}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
