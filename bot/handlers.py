@@ -241,7 +241,17 @@ async def _chamar_ia(prompt: str) -> str:
                 response = await _copilot.chat.completions.create(
                     model=model_name,
                     max_tokens=4096,
-                    messages=[{"role": "user", "content": prompt_github}],
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Você é um assistente especializado em análise jurídica. "
+                                "Responda APENAS com JSON válido, sem markdown, sem blocos de código, "
+                                "sem explicações e sem texto adicional antes ou depois do JSON."
+                            ),
+                        },
+                        {"role": "user", "content": prompt_github},
+                    ],
                 )
                 logger.info("IA: GitHub Copilot respondeu com modelo %s.", model_name)
                 return response.choices[0].message.content or ""
@@ -760,26 +770,35 @@ PROMPT_BUSCA = """Você é especialista em direito trabalhista brasileiro.
 
 CONTEXTO: Este escritório representa SEMPRE a empresa (reclamada). Precedentes favoráveis são decisões que beneficiaram a empresa. Precedentes desfavoráveis são decisões que prejudicaram a empresa.
 
-Busque nos dados abaixo precedentes {tipo_label} À EMPRESA sobre o tema: "{tema}"
+Busque nos dados abaixo precedentes {tipo_label} À EMPRESA relacionados a: "{tema}"
 
-Dados da planilha:
+INSTRUÇÕES:
+- O termo de busca pode ser um TEMA JURÍDICO (ex: "horas extras", "vínculo empregatício") OU um NOME DE CLIENTE/EMPRESA (ex: "iFood", "Loft").
+- Se o termo parecer um nome de empresa ou cliente, filtre pela coluna "CLIENTE" (busca parcial, sem distinção de maiúsculas/minúsculas).
+- Se o termo parecer um tema jurídico, analise as colunas "ENTENDIMENTOS FAVORÁVEIS" e "ENTENDIMENTOS DESFAVORÁVEIS".
+- Para busca de FAVORÁVEIS, foque na coluna "ENTENDIMENTOS FAVORÁVEIS".
+- Para busca de DESFAVORÁVEIS, foque na coluna "ENTENDIMENTOS DESFAVORÁVEIS".
+- Use busca semântica: encontre registros relacionados ao termo, mesmo sem correspondência exata de palavras.
+- Se não encontrar nenhum precedente relacionado, retorne total_encontrados = 0 e precedentes = [].
+
+Dados da planilha (lista de registros em JSON):
 {dados}
 
-Retorne APENAS JSON válido:
+Retorne APENAS JSON válido com esta estrutura exata:
 {{
-  "tema_buscado": str,
-  "tipo": str,
-  "total_encontrados": int,
+  "tema_buscado": "tema informado pelo usuário",
+  "tipo": "FAVORÁVEIS ou DESFAVORÁVEIS",
+  "total_encontrados": 0,
   "precedentes": [
     {{
-      "numero_processo": str,
-      "advogado": str,
-      "cliente": str,
-      "trt": str,
-      "data_decisao": str,
-      "tipo_decisao": str,
-      "entendimento_relevante": str,
-      "como_usar": str
+      "numero_processo": "número do processo",
+      "advogado": "sigla do advogado",
+      "cliente": "nome do cliente",
+      "trt": "TRT-X ou TST",
+      "data_decisao": "data da decisão",
+      "tipo_decisao": "Sentença ou Acórdão",
+      "entendimento_relevante": "trecho do entendimento relacionado ao tema buscado",
+      "como_usar": "como este precedente pode ser usado pela empresa em outros casos"
     }}
   ],
   "tese_consolidada": "tese consolidada do ponto de vista da empresa para usar em defesa",
