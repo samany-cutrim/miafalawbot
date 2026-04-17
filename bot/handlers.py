@@ -183,8 +183,8 @@ _CLAUDE_MODELS = [
 _GEMINI_MODELS = [
     "gemini-2.0-flash-lite",         # mais leve
     "gemini-2.0-flash",              # rápido
-    "gemini-2.5-flash-preview-04-17", # preview mais recente
-    "gemini-2.5-pro-preview-03-25",  # mais poderoso
+    "gemini-2.5-flash",              # flash mais recente
+    "gemini-2.5-pro",                # mais poderoso
 ]
 
 # Modelos Claude disponíveis via GitHub Models (gratuitos)
