@@ -185,9 +185,9 @@ _GEMINI_MODELS = [
 
 # Modelos Claude via GitHub Models (gratuitos)
 _GITHUB_MODELS = [
-    "claude-3-5-haiku-20241022",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-7-sonnet-20250219",
+    "claude-3-5-haiku",
+    "claude-3-5-sonnet",
+    "claude-3-7-sonnet",
 ]
 
 async def _chamar_ia(prompt: str) -> str:
@@ -213,21 +213,7 @@ async def _chamar_ia(prompt: str) -> str:
                 logger.info("IA: Gemini respondeu com modelo %s.", model_name)
                 return response.text
             except Exception as e:
-                err_str = str(e)
-                if "429" in err_str and "retry_delay" in err_str:
-                    import re as _re
-                    m = _re.search(r'seconds:\s*(\d+)', err_str)
-                    wait = int(m.group(1)) + 2 if m else 35
-                    logger.warning("Gemini modelo %s rate limit, aguardando %ss...", model_name, wait)
-                    await asyncio.sleep(wait)
-                    try:
-                        response = model.generate_content(prompt)
-                        logger.info("IA: Gemini respondeu após retry com modelo %s.", model_name)
-                        return response.text
-                    except Exception as e2:
-                        logger.warning("Gemini modelo %s falhou após retry (%s). Tentando próximo...", model_name, e2)
-                else:
-                    logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
+                logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     if _github_ok:
         for model_name in _GITHUB_MODELS:
