@@ -164,28 +164,50 @@ def extrair_trt_do_processo(numero: str) -> str:
 # CHAMADA À IA
 # ---------------------------------------------------------------------------
 
+# Modelos Claude em ordem de preferência (do mais leve/barato ao mais pesado)
+_CLAUDE_MODELS = [
+    "claude-3-haiku-20240307",       # mais barato
+    "claude-3-5-haiku-20241022",     # barato + capaz
+    "claude-3-5-sonnet-20241022",    # equilibrado
+    "claude-3-opus-20240229",        # mais poderoso
+]
+
+# Modelos Gemini em ordem de preferência (gratuitos primeiro)
+_GEMINI_MODELS = [
+    "gemini-2.0-flash-lite",         # gratuito - mais leve
+    "gemini-2.0-flash",              # gratuito - rápido
+    "gemini-2.0-flash-exp",          # gratuito - experimental
+    "gemini-1.5-flash-8b",           # gratuito - compacto
+    "gemini-1.5-flash",              # gratuito - padrão
+    "gemini-1.5-pro",                # pago - mais poderoso
+]
+
 async def _chamar_ia(prompt: str) -> str:
     if claude:
-        try:
-            response = await claude.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            logger.info("IA: Claude respondeu.")
-            return response.content[0].text
-        except Exception as e:
-            logger.warning("Claude falhou (%s). Tentando Gemini...", e)
+        for model_name in _CLAUDE_MODELS:
+            try:
+                response = await claude.messages.create(
+                    model=model_name,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                logger.info("IA: Claude respondeu com modelo %s.", model_name)
+                return response.content[0].text
+            except Exception as e:
+                logger.warning("Claude modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     if _gemini_ok:
-        try:
-            import google.generativeai as genai
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt)
-            logger.info("IA: Gemini respondeu (fallback).")
-            return response.text
-        except Exception as e:
-            raise RuntimeError(f"Ambas as IAs falharam. Último erro: {e}")
+        import google.generativeai as genai
+        for model_name in _GEMINI_MODELS:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                logger.info("IA: Gemini respondeu com modelo %s.", model_name)
+                return response.text
+            except Exception as e:
+                logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
+
+        raise RuntimeError("Todos os modelos Gemini falharam.")
 
     raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY ou GEMINI_API_KEY.")
 
