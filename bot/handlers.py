@@ -198,9 +198,9 @@ _GEMINI_MODELS = [
 # Modelos via GitHub Copilot Pro (models.inference.ai.azure.com)
 # Limite de input: ~8000 tokens ≈ 24000 chars
 _GITHUB_MODELS = [
-    "claude-3.7-sonnet",
-    "claude-3.5-sonnet",
-    "claude-3.5-haiku",
+    "claude-3-7-sonnet",
+    "claude-3-5-sonnet",
+    "claude-3-5-haiku",
     "gpt-4o",
     "gpt-4o-mini",
 ]
@@ -814,22 +814,38 @@ async def processar_busca(tipo: str, tema: str) -> str:
     tipo_label = "FAVORÁVEIS" if tipo == "favoraveis" else "DESFAVORÁVEIS"
     prompt    = PROMPT_BUSCA.format(tipo_label=tipo_label, tema=tema, dados=dados_str)
     raw       = await _chamar_ia(prompt)
+    logger.info("Busca raw IA: %s", raw[:500])
     resultado = _parse_json(raw)
     return _formatar_busca(resultado)
 
 
+def _get(d: dict, *keys, default="N/A"):
+    """Tenta múltiplos nomes de chave, retorna o primeiro encontrado."""
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, ""):
+            return v
+    return default
+
+
 def _formatar_busca(d: dict) -> str:
-    tipo = (d.get("tipo") or "").upper()
+    tipo = (_get(d, "tipo", default="")).upper()
     r  = f"🔍 *PRECEDENTES {tipo}*\n\n"
-    r += f"📌 *Tema:* {d.get('tema_buscado', 'N/A')}\n"
+    r += f"📌 *Tema:* {_get(d, 'tema_buscado', 'tema')}\n"
     r += f"📊 *Encontrados:* {d.get('total_encontrados', 0)}\n\n"
     for i, p in enumerate(d.get("precedentes") or [], 1):
-        r += f"{i}. *{p.get('numero_processo','N/A')}*\n"
-        r += f"   {p.get('cliente','N/A')} | {p.get('trt','N/A')} | {p.get('data_decisao','N/A')}\n"
-        r += f"   _{p.get('entendimento_relevante','N/A')}_\n"
-        r += f"   💡 {p.get('como_usar','N/A')}\n\n"
-    r += f"*Tese consolidada:*\n{d.get('tese_consolidada','N/A')}\n\n"
-    r += f"*Argumentos:*\n{d.get('argumentos_principais','N/A')}"
+        processo = _get(p, "numero_processo", "NÚMERO DO PROCESSO", "numero processo")
+        cliente  = _get(p, "cliente", "CLIENTE")
+        trt      = _get(p, "trt", "TRT")
+        data     = _get(p, "data_decisao", "DATA DA DECISÃO", "data decisao")
+        entend   = _get(p, "entendimento_relevante", "ENTENDIMENTOS FAVORÁVEIS", "ENTENDIMENTOS DESFAVORÁVEIS", "entendimento")
+        uso      = _get(p, "como_usar", "observacoes_precedente", "OBSERVAÇÕES")
+        r += f"{i}. *{processo}*\n"
+        r += f"   {cliente} | {trt} | {data}\n"
+        r += f"   _{entend}_\n"
+        r += f"   💡 {uso}\n\n"
+    r += f"*Tese consolidada:*\n{_get(d, 'tese_consolidada')}\n\n"
+    r += f"*Argumentos:*\n{_get(d, 'argumentos_principais')}"
     return r
 
 
