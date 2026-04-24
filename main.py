@@ -212,9 +212,12 @@ async def processar_texto_endpoint(req: TextoRequest, background_tasks: Backgrou
 
 @app.post("/processar-texto-sync")
 async def processar_texto_sync(req: TextoSyncRequest):
-    """Processa texto de forma síncrona para uso no fluxo do Chat App modal."""
+    """Processa texto de forma síncrona para uso no fluxo do Chat App modal.
+    Não inclui o texto de confirmação (/confirmar, /cancelar...) — os botões
+    são exibidos diretamente na card pelo Apps Script.
+    """
     try:
-        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, webhook_url="")
+        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, webhook_url="", include_confirmacao_text=False)
         return JSONResponse({"status": "ok", "resultado": resultado})
     except Exception as e:
         logger.exception("Erro ao processar texto (sync): %s", e)

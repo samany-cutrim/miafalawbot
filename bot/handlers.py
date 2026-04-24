@@ -874,8 +874,8 @@ async def _analisar_e_aguardar(
     return relatorio
 
 
-async def processar_texto(texto_pdf: str, advogado: str, texto: str, webhook_url: str) -> str:
-    return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url)
+async def processar_texto(texto_pdf: str, advogado: str, texto: str, webhook_url: str, include_confirmacao_text: bool = True) -> str:
+    return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url, include_confirmacao_text=include_confirmacao_text)
 
 
 async def processar_texto_chat(

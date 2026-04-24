@@ -31,18 +31,29 @@ def _client():
     return gspread.authorize(creds)
 
 
+def _aba_precedentes(sh):
+    """Retorna a worksheet de precedentes, tentando pelo nome e depois pela primeira aba."""
+    try:
+        return sh.worksheet("Precedentes")
+    except gspread.WorksheetNotFound:
+        pass
+    # Fallback: primeira aba com qualquer nome
+    logger.warning("Aba 'Precedentes' não encontrada. Usando a primeira aba da planilha.")
+    return sh.get_worksheet(0)
+
+
 def _salvar_sync(row: dict):
     sh = _client().open_by_key(SPREADSHEET_ID)
     valores = [row.get(col, "") for col in COLUNAS]
 
-    ws = sh.worksheet("Precedentes")
+    ws = _aba_precedentes(sh)
     ws.append_row(valores, value_input_option="USER_ENTERED")
     logger.info("Salvo em Precedentes: %s", row.get("NÚMERO DO PROCESSO"))
 
 
 def _buscar_sync() -> list[dict]:
     sh = _client().open_by_key(SPREADSHEET_ID)
-    return sh.worksheet("Precedentes").get_all_records()
+    return _aba_precedentes(sh).get_all_records()
 
 
 async def salvar_decisao(row: dict):

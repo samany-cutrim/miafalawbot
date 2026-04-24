@@ -163,6 +163,11 @@ function onCardClick(e) {
     return respostaCardChatAppBusca();
   }
 
+  if (invoked === "open_ajuda") {
+    chamarRender("/ajuda", { webhook_url: WEBHOOK_URL });
+    return { text: "Ajuda enviada no chat." };
+  }
+
   if (invoked === "confirm_decision") {
     chamarRender("/confirmar", {
       advogado: userName,
@@ -252,11 +257,6 @@ function respostaCardChatAppMenu() {
             {
               widgets: [
                 {
-                  textParagraph: {
-                    text: "Clique em <b>Enviar decisao</b> para abrir o modal no Google Chat."
-                  }
-                },
-                {
                   buttonList: {
                     buttons: [
                       {
@@ -274,14 +274,16 @@ function respostaCardChatAppMenu() {
                             "function": "open_busca_card"
                           }
                         }
+                      },
+                      {
+                        text: "Ajuda",
+                        onClick: {
+                          action: {
+                            "function": "open_ajuda"
+                          }
+                        }
                       }
                     ]
-                  }
-                },
-                {
-                  decoratedText: {
-                    text: "<font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
-                    startIcon: { knownIcon: "STAR" }
                   }
                 }
               ]
@@ -579,15 +581,21 @@ function enviarCardMenuPrincipal() {
             {
               buttonList: {
                 buttons: [
-                  getBotaoBusca("Favoraveis", "/favoraveis vinculo empregaticio"),
-                  getBotaoBusca("Desfavoraveis", "/desfavoraveis responsabilidade subsidiaria")
+                  {
+                    text: "Favoraveis",
+                    onClick: { action: { "function": "buscar_favoraveis" } }
+                  },
+                  {
+                    text: "Desfavoraveis",
+                    onClick: { action: { "function": "buscar_desfavoraveis" } }
+                  }
                 ]
               }
             },
             {
               decoratedText: {
                 topLabel: "Acoes rapidas",
-                text: "<font face=\"monospace\">/confirmar</font> · <font face=\"monospace\">/cancelar</font> · <font face=\"monospace\">/corrigir ...</font><br><font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
+                text: "<font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
                 startIcon: { knownIcon: "DESCRIPTION" }
               }
             }
@@ -612,14 +620,20 @@ function enviarCardBuscaPrecedentes() {
           widgets: [
             {
               textParagraph: {
-                text: "Escolha o tipo e depois informe o tema no chat. Exemplo: horas extras"
+                text: "Clique no tipo para buscar todos os precedentes na planilha. Para tema especifico, use /favoraveis [tema] ou /desfavoraveis [tema] no chat."
               }
             },
             {
               buttonList: {
                 buttons: [
-                  getBotaoBusca("Favoraveis", "/favoraveis horas extras"),
-                  getBotaoBusca("Desfavoraveis", "/desfavoraveis horas extras")
+                  {
+                    text: "Favoraveis",
+                    onClick: { action: { "function": "buscar_favoraveis" } }
+                  },
+                  {
+                    text: "Desfavoraveis",
+                    onClick: { action: { "function": "buscar_desfavoraveis" } }
+                  }
                 ]
               }
             },
