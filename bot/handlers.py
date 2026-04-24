@@ -169,41 +169,59 @@ def extrair_trt_do_processo(numero: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Modelos via GitHub Copilot (models.inference.ai.azure.com)
-# Ordem fixa: Claude primeiro, Gemini em segundo. Nunca GPT.
+# Ordem de preferência: Claude > Gemini > Llama > GPT.
 # Limite de input: ~8000 tokens ≈ 24000 chars
-# IDs reais do endpoint models.inference.ai.azure.com (GitHub Models)
-# Baseados na documentação GitHub Copilot supported models.
-# Ordem: Claude Sonnet > Haiku > Gemini. Nunca GPT.
-_GITHUB_MODELS = [
+# Preferências de modelos: Claude primeiro, Gemini segundo, Llama como último recurso e GPT por último.
+_GITHUB_MODELS_FALLBACK = [
     "claude-sonnet-4-5",
     "claude-sonnet-4",
     "claude-haiku-4-5",
     "claude-3-7-sonnet",
     "claude-3-5-sonnet",
     "claude-3-5-haiku",
-    "gemini-2-5-pro",
     "gemini-2.5-pro",
-    "gemini-2-5-flash",
     "gemini-2.5-flash",
-    "gemini-2-0-flash",
     "gemini-2.0-flash",
+    "Meta-Llama-3.1-405B-Instruct",
+    "Meta-Llama-3.1-70B-Instruct",
+    "Meta-Llama-3.1-8B-Instruct",
+    "Llama-3.3-70B-Instruct",
+    "gpt-4o",
+    "gpt-4o-mini",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
+# Palavras que identificam modelos que não devem ser usados para chat/completion.
+_NON_CHAT_KEYWORDS = ("text-embedding", "cohere", "embed")
+
+
+def _extrair_id_modelo(raw: str) -> str:
+    """Extrai o nome curto de um ID no formato azureml://registries/.../models/{nome}/versions/{v}."""
+    if raw.startswith("azureml://"):
+        parts = raw.split("/")
+        try:
+            idx = parts.index("models")
+            return parts[idx + 1]
+        except (ValueError, IndexError):
+            return raw
+    return raw
+
+
+def _e_non_chat(model_id: str) -> bool:
+    low = model_id.lower()
+    return any(kw in low for kw in _NON_CHAT_KEYWORDS)
+
 
 async def _resolver_modelos_github() -> list[str]:
-    """Resolve os modelos permitidos pela conta, priorizando Claude e Gemini.
-    Nunca inclui GPT.
-    """
+    """Resolve os modelos permitidos pela conta: Claude > Gemini > Llama > GPT."""
     global _cached_model_order
 
     if _cached_model_order:
         return _cached_model_order
 
-    modelos_disponiveis: list[str] = []
+    ids_brutos: list[str] = []
     if GITHUB_TOKEN:
         try:
-            # Usa httpx direto para evitar erro de parsing Pydantic do SDK openai
             async with httpx.AsyncClient(timeout=15) as cli:
                 r = await cli.get(
                     "https://models.inference.ai.azure.com/models",
@@ -212,32 +230,41 @@ async def _resolver_modelos_github() -> list[str]:
                 if r.status_code == 200:
                     data = r.json()
                     if isinstance(data, list):
-                        modelos_disponiveis = [m.get("id", "") or m.get("name", "") for m in data if isinstance(m, dict)]
+                        ids_brutos = [m.get("id", "") or m.get("name", "") for m in data if isinstance(m, dict)]
                     elif isinstance(data, dict):
                         items = data.get("data") or data.get("models") or data.get("value") or []
-                        modelos_disponiveis = [m.get("id", "") or m.get("name", "") for m in items if isinstance(m, dict)]
-                    modelos_disponiveis = [m for m in modelos_disponiveis if m]
-                    logger.info("Modelos disponíveis no endpoint: %s", ", ".join(modelos_disponiveis))
+                        ids_brutos = [m.get("id", "") or m.get("name", "") for m in items if isinstance(m, dict)]
+                    ids_brutos = [m for m in ids_brutos if m]
                 else:
                     logger.warning("Falha ao listar modelos (status %s).", r.status_code)
         except Exception as e:
             logger.warning("Falha ao listar modelos do endpoint (%s).", e)
 
-    # Se a listagem falhar, usa fallback estático configurado.
-    if not modelos_disponiveis:
-        _cached_model_order = list(_GITHUB_MODELS)
+    if not ids_brutos:
+        _cached_model_order = list(_GITHUB_MODELS_FALLBACK)
+        logger.info("Usando lista de modelos fallback.")
         return _cached_model_order
 
-    lower_map = {m.lower(): m for m in modelos_disponiveis}
+    # Extrai IDs curtos e remove modelos que não suportam chat/completion.
+    modelos_validos = [_extrair_id_modelo(raw) for raw in ids_brutos]
+    modelos_validos = [m for m in modelos_validos if m and not _e_non_chat(m)]
+    logger.info("Modelos disponíveis para chat/completion: %s", ", ".join(modelos_validos))
+
+    if not modelos_validos:
+        _cached_model_order = list(_GITHUB_MODELS_FALLBACK)
+        return _cached_model_order
+
+    lower_map = {m.lower(): m for m in modelos_validos}
 
     claude = [lower_map[k] for k in lower_map if "claude" in k]
     gemini = [lower_map[k] for k in lower_map if "gemini" in k]
+    llama  = [lower_map[k] for k in lower_map if "llama" in k or "meta" in k]
+    gpt    = [lower_map[k] for k in lower_map if "gpt" in k]
 
-    # Ordena por preferência quando existir correspondência parcial.
-    def _ordenar_preferencia(candidatos: list[str], preferencias: list[str]) -> list[str]:
+    def _ordenar(candidatos: list[str], prefs: list[str]) -> list[str]:
         ordenados: list[str] = []
-        usados = set()
-        for pref in preferencias:
+        usados: set[str] = set()
+        for pref in prefs:
             pref_l = pref.lower()
             for c in candidatos:
                 if c in usados:
@@ -250,24 +277,17 @@ async def _resolver_modelos_github() -> list[str]:
                 ordenados.append(c)
         return ordenados
 
-    claude = _ordenar_preferencia(claude, [
-        "claude-sonnet-4-5",
-        "claude-sonnet-4",
-        "claude-haiku-4-5",
-        "claude-3-7-sonnet",
-        "claude-3-5-sonnet",
-        "claude-3-5-haiku",
-    ])
-    gemini = _ordenar_preferencia(gemini, [
-        "gemini-2-5-pro",
-        "gemini-2.5-pro",
-        "gemini-2-5-flash",
-        "gemini-2.5-flash",
-        "gemini-2-0-flash",
-        "gemini-2.0-flash",
-    ])
+    claude = _ordenar(claude, ["claude-sonnet-4-5", "claude-sonnet-4", "claude-haiku-4-5",
+                               "claude-3-7-sonnet", "claude-3-5-sonnet", "claude-3-5-haiku"])
+    gemini = _ordenar(gemini, ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"])
+    llama  = _ordenar(llama,  ["Meta-Llama-3.1-405B-Instruct", "Llama-3.3-70B-Instruct",
+                               "Meta-Llama-3.1-70B-Instruct", "Meta-Llama-3.1-8B-Instruct"])
+    gpt    = _ordenar(gpt, ["gpt-4o", "gpt-4o-mini"])
 
-    _cached_model_order = claude + gemini
+    _cached_model_order = claude + gemini + llama + gpt
+    if not _cached_model_order:
+        # Último recurso: qualquer modelo não-GPT disponível
+        _cached_model_order = list(modelos_validos)
     return _cached_model_order
 
 async def _chamar_ia(prompt: str) -> str:
@@ -286,7 +306,7 @@ async def _chamar_ia(prompt: str) -> str:
 
         if not modelos:
             raise RuntimeError(
-                "Nenhum modelo Claude/Gemini válido disponível no endpoint da conta. "
+                "Nenhum modelo de chat válido disponível no endpoint da conta. "
                 "Use /debug-models para verificar os modelos liberados para o GITHUB_TOKEN."
             )
 
@@ -320,7 +340,7 @@ async def _chamar_ia(prompt: str) -> str:
                 logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     raise RuntimeError(
-        "Nenhuma IA disponível no endpoint com modelos Claude/Gemini. "
+        "Nenhuma IA disponível no endpoint com modelos de chat/completion. "
         "Confirme o GITHUB_TOKEN e os modelos liberados para a conta (verifique /debug-models)."
     )
 
