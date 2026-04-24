@@ -12,6 +12,7 @@ import base64
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -515,14 +516,23 @@ async def debug_models():
     if not GITHUB_TOKEN:
         return {"error": "GITHUB_TOKEN nao configurado"}
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(
-            api_key=GITHUB_TOKEN,
-            base_url="https://models.inference.ai.azure.com",
-        )
-        models = await client.models.list()
-        ids = sorted([m.id for m in models.data])
-        return {"total": len(ids), "models": ids}
+        # Usa httpx direto para evitar erro de parsing Pydantic do SDK openai
+        async with httpx.AsyncClient(timeout=15) as cli:
+            r = await cli.get(
+                "https://models.inference.ai.azure.com/models",
+                headers={"Authorization": f"Bearer {GITHUB_TOKEN}"},
+            )
+            if r.status_code != 200:
+                return {"error": f"HTTP {r.status_code}", "body": r.text[:500]}
+            data = r.json()
+            if isinstance(data, list):
+                ids = sorted(m.get("id", "") or m.get("name", "") for m in data if isinstance(m, dict))
+            elif isinstance(data, dict):
+                items = data.get("data") or data.get("models") or data.get("value") or []
+                ids = sorted(m.get("id", "") or m.get("name", "") for m in items if isinstance(m, dict))
+            else:
+                return {"error": "formato inesperado", "raw": str(data)[:500]}
+            ids = [i for i in ids if i]
+            return {"total": len(ids), "models": ids}
     except Exception as e:
         return {"error": str(e)}

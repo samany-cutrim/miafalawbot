@@ -171,24 +171,22 @@ def extrair_trt_do_processo(numero: str) -> str:
 # Modelos via GitHub Copilot (models.inference.ai.azure.com)
 # Ordem fixa: Claude primeiro, Gemini em segundo. Nunca GPT.
 # Limite de input: ~8000 tokens ≈ 24000 chars
+# IDs reais do endpoint models.inference.ai.azure.com (GitHub Models)
+# Baseados na documentação GitHub Copilot supported models.
+# Ordem: Claude Sonnet > Haiku > Gemini. Nunca GPT.
 _GITHUB_MODELS = [
-    "claude-3-7-sonnet",
-    "claude-3.7-sonnet",
+    "claude-sonnet-4-5",
     "claude-sonnet-4",
-    "claude-4-sonnet",
-    "claude-4.0-sonnet",
+    "claude-haiku-4-5",
+    "claude-3-7-sonnet",
     "claude-3-5-sonnet",
-    "claude-3.5-sonnet",
     "claude-3-5-haiku",
-    "claude-3.5-haiku",
-    "claude-3-haiku",
-    "claude-3-opus",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-2-5-pro",
     "gemini-2.5-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash",
+    "gemini-2-5-flash",
+    "gemini-2.5-flash",
+    "gemini-2-0-flash",
+    "gemini-2.0-flash",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
@@ -203,11 +201,25 @@ async def _resolver_modelos_github() -> list[str]:
         return _cached_model_order
 
     modelos_disponiveis: list[str] = []
-    if _copilot_ok and _copilot:
+    if GITHUB_TOKEN:
         try:
-            resposta = await _copilot.models.list()
-            modelos_disponiveis = [m.id for m in resposta.data]
-            logger.info("Modelos disponíveis no endpoint: %s", ", ".join(modelos_disponiveis))
+            # Usa httpx direto para evitar erro de parsing Pydantic do SDK openai
+            async with httpx.AsyncClient(timeout=15) as cli:
+                r = await cli.get(
+                    "https://models.inference.ai.azure.com/models",
+                    headers={"Authorization": f"Bearer {GITHUB_TOKEN}"},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list):
+                        modelos_disponiveis = [m.get("id", "") or m.get("name", "") for m in data if isinstance(m, dict)]
+                    elif isinstance(data, dict):
+                        items = data.get("data") or data.get("models") or data.get("value") or []
+                        modelos_disponiveis = [m.get("id", "") or m.get("name", "") for m in items if isinstance(m, dict)]
+                    modelos_disponiveis = [m for m in modelos_disponiveis if m]
+                    logger.info("Modelos disponíveis no endpoint: %s", ", ".join(modelos_disponiveis))
+                else:
+                    logger.warning("Falha ao listar modelos (status %s).", r.status_code)
         except Exception as e:
             logger.warning("Falha ao listar modelos do endpoint (%s).", e)
 
@@ -239,18 +251,20 @@ async def _resolver_modelos_github() -> list[str]:
         return ordenados
 
     claude = _ordenar_preferencia(claude, [
+        "claude-sonnet-4-5",
+        "claude-sonnet-4",
+        "claude-haiku-4-5",
         "claude-3-7-sonnet",
-        "claude-3.7-sonnet",
         "claude-3-5-sonnet",
-        "claude-3.5-sonnet",
         "claude-3-5-haiku",
-        "claude-3.5-haiku",
     ])
     gemini = _ordenar_preferencia(gemini, [
+        "gemini-2-5-pro",
+        "gemini-2.5-pro",
+        "gemini-2-5-flash",
+        "gemini-2.5-flash",
+        "gemini-2-0-flash",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
     ])
 
     _cached_model_order = claude + gemini
