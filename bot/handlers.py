@@ -819,7 +819,11 @@ Retorne APENAS JSON válido com esta estrutura exata:
 async def processar_busca(tipo: str, tema: str) -> str:
     if not tema:
         return f"⚠️ Informe o tema. Exemplo: `/{tipo} vínculo empregatício`"
-    rows      = await buscar_precedentes()
+    rows = await buscar_precedentes()
+    tema_normalizado = (tema or "").strip().lower()
+    if tema_normalizado in {"todos", "todas", "all", "*"}:
+        return _formatar_busca_todos(tipo, rows)
+
     dados_str = json.dumps(rows, ensure_ascii=False)[:25000]
     tipo_label = "FAVORÁVEIS" if tipo == "favoraveis" else "DESFAVORÁVEIS"
     prompt    = PROMPT_BUSCA.format(tipo_label=tipo_label, tema=tema, dados=dados_str)
@@ -836,6 +840,29 @@ def _get(d: dict, *keys, default="N/A"):
         if v not in (None, ""):
             return v
     return default
+
+
+def _formatar_busca_todos(tipo: str, rows: list[dict]) -> str:
+    coluna = "ENTENDIMENTOS FAVORÁVEIS" if tipo == "favoraveis" else "ENTENDIMENTOS DESFAVORÁVEIS"
+    rotulo = "FAVORÁVEIS" if tipo == "favoraveis" else "DESFAVORÁVEIS"
+
+    filtrados = [r for r in rows if str(r.get(coluna, "")).strip()]
+    if not filtrados:
+        return f"🔍 *PRECEDENTES {rotulo}*\n\nNenhum precedente encontrado na planilha."
+
+    # Exibe os mais recentes primeiro e limita para evitar mensagens gigantes.
+    selecionados = list(reversed(filtrados))[:10]
+    r = f"🔍 *PRECEDENTES {rotulo}*\n\n"
+    r += f"📌 *Tema:* todos\n"
+    r += f"📊 *Encontrados:* {len(filtrados)} (mostrando 10 mais recentes)\n\n"
+
+    for i, row in enumerate(selecionados, 1):
+        r += f"{i}. *{row.get('NÚMERO DO PROCESSO', 'N/A')}*\n"
+        r += f"   {row.get('CLIENTE', 'N/A')} | {row.get('TRT', 'N/A')} | {row.get('DATA DA DECISÃO', 'N/A')}\n"
+        r += f"   _{row.get(coluna, 'N/A')}_\n"
+        r += f"   💡 {row.get('OBSERVAÇÕES', 'N/A')}\n\n"
+
+    return r.strip()
 
 
 def _formatar_busca(d: dict) -> str:

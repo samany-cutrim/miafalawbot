@@ -14,6 +14,726 @@ var ULTIMA_LEITURA_KEY = "ultimaLeitura";
 
 
 // ---------------------------------------------------------------------------
+// CHAT APP NATIVO (com modal/dialog)
+// ---------------------------------------------------------------------------
+
+function onAddToSpace(e) {
+  return respostaCardChatAppMenu();
+}
+
+
+function onMessage(e) {
+  var text = ((e.message && e.message.text) || "").trim().toLowerCase();
+  if (text === "/menu" || text === "menu" || text === "/ajuda" || text === "ajuda") {
+    return respostaCardChatAppMenu();
+  }
+  if (text === "/busca" || text === "busca") {
+    return respostaCardChatAppBusca();
+  }
+  return respostaCardChatAppMenu();
+}
+
+
+function onCardClick(e) {
+  var invoked = getInvokedFunction(e);
+  var userName = (e.user && e.user.displayName) ? e.user.displayName : "Advogado";
+
+  if (invoked === "open_decision_dialog") {
+    return respostaDialogNovaDecisao();
+  }
+
+  if (invoked === "submit_decision_dialog") {
+    var cliente = getFormInputValue(e, "cliente");
+    var tipo = getFormInputValue(e, "tipo_responsabilidade");
+    var decisao = getFormInputValue(e, "decisao");
+
+    if (!decisao) {
+      return {
+        text: "Informe o conteudo da decisao no modal para continuar."
+      };
+    }
+
+    var metadados = "";
+    if (cliente) metadados += "Cliente: " + cliente + "\n";
+    if (tipo) metadados += "Tipo: " + tipo;
+
+    chamarRender("/processar-texto", {
+      texto_pdf: decisao,
+      advogado: userName,
+      texto: metadados,
+      webhook_url: WEBHOOK_URL
+    });
+
+    return {
+      cardsV2: [
+        {
+          cardId: "analise_iniciada",
+          card: {
+            header: getBaseCardHeader("Analise iniciada"),
+            sections: [
+              {
+                widgets: [
+                  {
+                    textParagraph: {
+                      text: "Recebi sua decisao e iniciei a analise. O resultado sera publicado no chat em instantes."
+                    }
+                  },
+                  {
+                    buttonList: {
+                      buttons: [
+                        {
+                          text: "Confirmar",
+                          onClick: {
+                            action: {
+                              "function": "confirm_decision"
+                            }
+                          }
+                        },
+                        {
+                          text: "Cancelar",
+                          onClick: {
+                            action: {
+                              "function": "cancel_decision"
+                            }
+                          }
+                        },
+                        {
+                          text: "Corrigir",
+                          onClick: {
+                            action: {
+                              "function": "open_correction_dialog"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    };
+  }
+
+  if (invoked === "buscar_favoraveis") {
+    chamarRender("/buscar", {
+      tipo: "favoraveis",
+      tema: "todos",
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Buscando precedentes favoraveis na planilha..." };
+  }
+
+  if (invoked === "open_busca_card") {
+    return respostaCardChatAppBusca();
+  }
+
+  if (invoked === "buscar_desfavoraveis") {
+    chamarRender("/buscar", {
+      tipo: "desfavoraveis",
+      tema: "todos",
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Buscando precedentes desfavoraveis na planilha..." };
+  }
+
+  if (invoked === "submit_busca_favoraveis") {
+    var temaFav = getFormInputValue(e, "tema_busca");
+    if (!temaFav) {
+      return { text: "Informe o tema da busca." };
+    }
+    chamarRender("/buscar", {
+      tipo: "favoraveis",
+      tema: temaFav,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Busca de favoraveis iniciada para: " + temaFav };
+  }
+
+  if (invoked === "submit_busca_desfavoraveis") {
+    var temaDes = getFormInputValue(e, "tema_busca");
+    if (!temaDes) {
+      return { text: "Informe o tema da busca." };
+    }
+    chamarRender("/buscar", {
+      tipo: "desfavoraveis",
+      tema: temaDes,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Busca de desfavoraveis iniciada para: " + temaDes };
+  }
+
+  if (invoked === "confirm_decision") {
+    chamarRender("/confirmar", {
+      advogado: userName,
+      webhook_url: WEBHOOK_URL
+    });
+    return respostaCardChatAppEmail();
+  }
+
+  if (invoked === "cancel_decision") {
+    chamarRender("/cancelar", {
+      advogado: userName,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Cancelamento enviado." };
+  }
+
+  if (invoked === "open_correction_dialog") {
+    return respostaDialogCorrecao();
+  }
+
+  if (invoked === "submit_correction_dialog") {
+    var instrucao = getFormInputValue(e, "instrucao_correcao");
+    if (!instrucao) {
+      return { text: "Informe o que corrigir para continuar." };
+    }
+    chamarRender("/corrigir", {
+      advogado: userName,
+      instrucao: instrucao,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Correcao enviada para reanalise." };
+  }
+
+  if (invoked === "email_yes") {
+    chamarRender("/sim", {
+      advogado: userName,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Gerando sugestao de e-mail..." };
+  }
+
+  if (invoked === "email_no") {
+    chamarRender("/nao", {
+      advogado: userName,
+      webhook_url: WEBHOOK_URL
+    });
+    return { text: "Perfeito, e-mail dispensado." };
+  }
+
+  return { text: "Acao nao reconhecida." };
+}
+
+
+function getInvokedFunction(e) {
+  try {
+    if (e.common && e.common.invokedFunction) return e.common.invokedFunction;
+    if (e.action && e.action.actionMethodName) return e.action.actionMethodName;
+  } catch (err) {
+    Logger.log("Erro getInvokedFunction: " + err);
+  }
+  return "";
+}
+
+
+function getFormInputValue(e, key) {
+  try {
+    var inputs = (e.common && e.common.formInputs) ? e.common.formInputs : {};
+    var field = inputs[key] || {};
+    var stringInputs = field.stringInputs || {};
+    var values = stringInputs.value || [];
+    return values.length ? String(values[0]).trim() : "";
+  } catch (err) {
+    Logger.log("Erro getFormInputValue(" + key + "): " + err);
+    return "";
+  }
+}
+
+
+function respostaCardChatAppMenu() {
+  return {
+    cardsV2: [
+      {
+        cardId: "chatapp_menu",
+        card: {
+          header: getBaseCardHeader("Menu principal"),
+          sections: [
+            {
+              widgets: [
+                {
+                  textParagraph: {
+                    text: "Clique em <b>Enviar decisao</b> para abrir o modal no Google Chat."
+                  }
+                },
+                {
+                  buttonList: {
+                    buttons: [
+                      {
+                        text: "Enviar decisao",
+                        onClick: {
+                          action: {
+                            "function": "open_decision_dialog"
+                          }
+                        }
+                      },
+                      {
+                        text: "Busca de precedentes",
+                        onClick: {
+                          action: {
+                            "function": "open_busca_card"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  decoratedText: {
+                    text: "<font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
+                    startIcon: { knownIcon: "STAR" }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
+
+function respostaCardChatAppBusca() {
+  return {
+    cardsV2: [
+      {
+        cardId: "chatapp_busca",
+        card: {
+          header: getBaseCardHeader("Busca de precedentes"),
+          sections: [
+            {
+              widgets: [
+                {
+                  textParagraph: {
+                    text: "Clique no tipo para buscar direto na planilha. Para tema especifico, use /favoraveis [tema] ou /desfavoraveis [tema]."
+                  }
+                },
+                {
+                  buttonList: {
+                    buttons: [
+                      {
+                        text: "Favoraveis",
+                        onClick: {
+                          action: {
+                            "function": "buscar_favoraveis"
+                          }
+                        }
+                      },
+                      {
+                        text: "Desfavoraveis",
+                        onClick: {
+                          action: {
+                            "function": "buscar_desfavoraveis"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
+
+function respostaCardChatAppEmail() {
+  return {
+    cardsV2: [
+      {
+        cardId: "chatapp_email",
+        card: {
+          header: getBaseCardHeader("Sugestao de e-mail"),
+          sections: [
+            {
+              widgets: [
+                {
+                  textParagraph: {
+                    text: "Deseja gerar sugestao de e-mail para o cliente?"
+                  }
+                },
+                {
+                  buttonList: {
+                    buttons: [
+                      {
+                        text: "Sim",
+                        onClick: {
+                          action: {
+                            "function": "email_yes"
+                          }
+                        }
+                      },
+                      {
+                        text: "Nao",
+                        onClick: {
+                          action: {
+                            "function": "email_no"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
+
+function respostaDialogCorrecao() {
+  return {
+    actionResponse: {
+      type: "DIALOG",
+      dialogAction: {
+        dialog: {
+          body: {
+            sections: [
+              {
+                header: "Corrigir analise",
+                widgets: [
+                  {
+                    textInput: {
+                      name: "instrucao_correcao",
+                      label: "O que deve ser corrigido?",
+                      type: "MULTIPLE_LINE"
+                    }
+                  },
+                  {
+                    buttonList: {
+                      buttons: [
+                        {
+                          text: "Enviar correcao",
+                          onClick: {
+                            action: {
+                              "function": "submit_correction_dialog"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  };
+}
+
+
+function respostaDialogNovaDecisao() {
+  var tipos = [
+    "OL",
+    "Nuvem",
+    "Terceirizacao",
+    "Subsidiaria",
+    "Ex Funcionario",
+    "Ex-Foodlovers",
+    "Marketplace"
+  ];
+
+  return {
+    actionResponse: {
+      type: "DIALOG",
+      dialogAction: {
+        dialog: {
+          body: {
+            sections: [
+              {
+                header: "Nova decisao",
+                widgets: [
+                  {
+                    textInput: {
+                      name: "cliente",
+                      label: "Cliente (opcional)",
+                      type: "SINGLE_LINE"
+                    }
+                  },
+                  {
+                    selectionInput: {
+                      name: "tipo_responsabilidade",
+                      label: "Tipo de Responsabilidade",
+                      type: "DROPDOWN",
+                      items: tipos.map(function(t) {
+                        return { text: t, value: t };
+                      })
+                    }
+                  },
+                  {
+                    textInput: {
+                      name: "decisao",
+                      label: "Cole o texto da decisao",
+                      type: "MULTIPLE_LINE"
+                    }
+                  },
+                  {
+                    buttonList: {
+                      buttons: [
+                        {
+                          text: "Enviar decisao",
+                          onClick: {
+                            action: {
+                              "function": "submit_decision_dialog"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  };
+}
+
+
+function getFormUrl() {
+  try {
+    return FormApp.openById(FORM_ID).getPublishedUrl();
+  } catch (e) {
+    Logger.log("Erro getFormUrl: " + e);
+    return "";
+  }
+}
+
+
+function getBaseCardHeader(subtitle) {
+  return {
+    title: "Mia Falaw Bot",
+    subtitle: subtitle || "Fluxo sem admin"
+  };
+}
+
+
+function getBotaoAbrirFormulario(texto) {
+  var formUrl = getFormUrl();
+  if (!formUrl) {
+    return null;
+  }
+  return {
+    text: texto || "Abrir formulario",
+    onClick: {
+      openLink: {
+        url: formUrl
+      }
+    }
+  };
+}
+
+
+function getBotaoBusca(textoBotao, comandoExemplo) {
+  // Sem Chat App admin, o webhook so permite abrir links; usamos atalho visual.
+  var base = "https://chat.google.com/?q=";
+  return {
+    text: textoBotao,
+    onClick: {
+      openLink: {
+        url: base + encodeURIComponent(comandoExemplo)
+      }
+    }
+  };
+}
+
+
+function enviarCardMenuPrincipal() {
+  var botaoFormulario = getBotaoAbrirFormulario("Enviar decisao");
+  var botoes = [];
+  if (botaoFormulario) botoes.push(botaoFormulario);
+
+  var card = {
+    cardId: "menu_principal",
+    card: {
+      header: getBaseCardHeader("Menu principal"),
+      sections: [
+        {
+          widgets: [
+            {
+              textParagraph: {
+                text: "<b>Fluxo com botoes (modo Apps Script):</b><br>1) Clique em <b>Enviar decisao</b><br>2) Preencha o formulario (modal simulado)<br>3) Use os botoes/comandos de acao no chat"
+              }
+            },
+            {
+              buttonList: {
+                buttons: botoes
+              }
+            },
+            {
+              textParagraph: {
+                text: "<b>Busca de precedentes:</b>"
+              }
+            },
+            {
+              buttonList: {
+                buttons: [
+                  getBotaoBusca("Favoraveis", "/favoraveis vinculo empregaticio"),
+                  getBotaoBusca("Desfavoraveis", "/desfavoraveis responsabilidade subsidiaria")
+                ]
+              }
+            },
+            {
+              decoratedText: {
+                topLabel: "Acoes rapidas",
+                text: "<font face=\"monospace\">/confirmar</font> · <font face=\"monospace\">/cancelar</font> · <font face=\"monospace\">/corrigir ...</font><br><font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
+                startIcon: { knownIcon: "DESCRIPTION" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    _fallback_text: "Use /menu para abrir os botoes e enviar decisao."
+  };
+
+  chamarWebhookCard(card);
+}
+
+
+function enviarCardBuscaPrecedentes() {
+  var card = {
+    cardId: "busca_precedentes",
+    card: {
+      header: getBaseCardHeader("Busca de precedentes"),
+      sections: [
+        {
+          widgets: [
+            {
+              textParagraph: {
+                text: "Escolha o tipo e depois informe o tema no chat. Exemplo: horas extras"
+              }
+            },
+            {
+              buttonList: {
+                buttons: [
+                  getBotaoBusca("Favoraveis", "/favoraveis horas extras"),
+                  getBotaoBusca("Desfavoraveis", "/desfavoraveis horas extras")
+                ]
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/favoraveis [tema]</font>",
+                bottomLabel: "Busca precedentes favoraveis para a empresa",
+                startIcon: { knownIcon: "STAR" }
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/desfavoraveis [tema]</font>",
+                bottomLabel: "Busca precedentes desfavoraveis para a empresa",
+                startIcon: { knownIcon: "STAR" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    _fallback_text: "Busca: /favoraveis [tema] ou /desfavoraveis [tema]"
+  };
+
+  chamarWebhookCard(card);
+}
+
+
+function enviarCardAcoesPosAnalise() {
+  var card = {
+    cardId: "acoes_pos_analise",
+    card: {
+      header: getBaseCardHeader("Acoes da analise"),
+      sections: [
+        {
+          widgets: [
+            {
+              textParagraph: {
+                text: "Escolha uma acao apos revisar a analise:"
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/confirmar</font>",
+                bottomLabel: "Salva na planilha",
+                startIcon: { knownIcon: "CHECK_CIRCLE" }
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/cancelar</font>",
+                bottomLabel: "Descarta a analise",
+                startIcon: { knownIcon: "CANCEL" }
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/corrigir [instrucao]</font>",
+                bottomLabel: "Reanalisa com ajuste",
+                startIcon: { knownIcon: "EDIT" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    _fallback_text: "Acoes: /confirmar, /cancelar, /corrigir [instrucao]"
+  };
+
+  chamarWebhookCard(card);
+}
+
+
+function enviarCardEmail() {
+  var card = {
+    cardId: "acoes_email",
+    card: {
+      header: getBaseCardHeader("Sugestao de e-mail"),
+      sections: [
+        {
+          widgets: [
+            {
+              textParagraph: {
+                text: "Deseja gerar sugestao de e-mail para o cliente?"
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/sim</font>",
+                bottomLabel: "Gerar sugestao",
+                startIcon: { knownIcon: "EMAIL" }
+              }
+            },
+            {
+              decoratedText: {
+                text: "<font face=\"monospace\">/nao</font>",
+                bottomLabel: "Dispensar",
+                startIcon: { knownIcon: "EMAIL" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    _fallback_text: "E-mail: /sim ou /nao"
+  };
+
+  chamarWebhookCard(card);
+}
+
+
+// ---------------------------------------------------------------------------
 // TRIGGER 1: envio do formulario
 // ---------------------------------------------------------------------------
 
@@ -78,6 +798,9 @@ function onFormSubmit(e) {
       }),
       muteHttpExceptions: true
     });
+
+    // Reforca as acoes em formato visual apos envio
+    enviarCardAcoesPosAnalise();
   } catch (err) {
     Logger.log("Erro onFormSubmit: " + err);
     chamarWebhook("Erro ao processar o formulario. Tente novamente.");
@@ -145,8 +868,17 @@ function processarComando(msg) {
     chamarRender("/buscar", { tipo: "desfavoraveis", tema: extrairTema(texto), webhook_url: WEBHOOK_URL });
     return;
   }
+  if (tl === "/busca" || tl === "busca") {
+    enviarCardBuscaPrecedentes();
+    return;
+  }
+  if (tl === "/menu" || tl === "menu") {
+    enviarCardMenuPrincipal();
+    return;
+  }
   if (tl === "/ajuda" || tl === "ajuda") {
     chamarRender("/ajuda", { webhook_url: WEBHOOK_URL });
+    enviarCardMenuPrincipal();
     return;
   }
   if (tl === "/link" || tl === "link") {
@@ -155,6 +887,7 @@ function processarComando(msg) {
   }
   if (tl === "/confirmar" || tl === "confirmar") {
     chamarRender("/confirmar", { advogado: advogado, webhook_url: WEBHOOK_URL });
+    enviarCardEmail();
     return;
   }
   if (tl === "/cancelar" || tl === "cancelar") {
@@ -225,6 +958,33 @@ function chamarWebhook(texto) {
   });
 }
 
+
+function chamarWebhookCard(card) {
+  try {
+    var fallbackText = (card && card._fallback_text) ? card._fallback_text : "";
+    var cardPayload = JSON.parse(JSON.stringify(card || {}));
+    delete cardPayload._fallback_text;
+
+    var resp = UrlFetchApp.fetch(WEBHOOK_URL, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({ cardsV2: [cardPayload] }),
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200 && resp.getResponseCode() !== 201) {
+      Logger.log("Erro chamarWebhookCard: " + resp.getResponseCode() + " " + resp.getContentText());
+      if (fallbackText) {
+        chamarWebhook(fallbackText);
+      }
+    }
+  } catch (e) {
+    Logger.log("Erro chamarWebhookCard: " + e);
+    if (card && card._fallback_text) {
+      chamarWebhook(card._fallback_text);
+    }
+  }
+}
+
 function chamarRender(endpoint, payload) {
   try {
     UrlFetchApp.fetch(RENDER_URL + endpoint, {
@@ -273,10 +1033,5 @@ function testarWebhook() {
 }
 
 function postLinkNoChat() {
-  var form = FormApp.openById(FORM_ID);
-  chamarWebhook(
-    "*Mia Falaw Bot* - Para registrar uma decisao acesse:\n\n" +
-    form.getPublishedUrl() + "\n\n" +
-    "_Anexe o PDF, informe cliente/tipo e envie._"
-  );
+  enviarCardMenuPrincipal();
 }
