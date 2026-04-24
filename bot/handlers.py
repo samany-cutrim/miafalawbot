@@ -9,35 +9,17 @@ import json
 import logging
 import re
 from datetime import datetime
-import anthropic
 import pdfplumber
 
 from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
-from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GITHUB_TOKEN, COLUNAS
+from bot.config import GITHUB_TOKEN
 from bot.webhook import send_webhook
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-# Claude client
-claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-
-# Gemini fallback
-if GEMINI_API_KEY:
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        _gemini_ok = True
-        logger.info("Gemini inicializado com sucesso.")
-    except Exception as e:
-        logger.error("Falha ao inicializar Gemini: %s", e)
-        _gemini_ok = False
-else:
-    logger.warning("GEMINI_API_KEY não configurada.")
-    _gemini_ok = False
-
-# GitHub Copilot fallback (via openai SDK — igual ao revisorfalaw)
+# GitHub Copilot (via openai SDK)
 _copilot = None
 _copilot_ok = False
 if GITHUB_TOKEN:
@@ -183,54 +165,19 @@ def extrair_trt_do_processo(numero: str) -> str:
 # CHAMADA À IA
 # ---------------------------------------------------------------------------
 
-# Modelos Claude (pago - fallback rápido)
-_CLAUDE_MODELS = [
-    "claude-3-haiku-20240307",
-    "claude-3-5-haiku-20241022",
-]
-
-# Modelos Gemini (gratuitos)
-_GEMINI_MODELS = [
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash",
-]
-
-# Modelos via GitHub Copilot Pro (models.inference.ai.azure.com)
+# Modelos via GitHub Copilot (models.inference.ai.azure.com)
+# Ordem fixa: Claude primeiro, Gemini em segundo. Nunca GPT.
 # Limite de input: ~8000 tokens ≈ 24000 chars
 _GITHUB_MODELS = [
     "claude-3-7-sonnet",
     "claude-3-5-sonnet",
     "claude-3-5-haiku",
-    "gpt-4o",
-    "gpt-4o-mini",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
 async def _chamar_ia(prompt: str) -> str:
-    if claude:
-        for model_name in _CLAUDE_MODELS:
-            try:
-                response = await claude.messages.create(
-                    model=model_name,
-                    max_tokens=4096,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                logger.info("IA: Claude respondeu com modelo %s.", model_name)
-                return response.content[0].text
-            except Exception as e:
-                logger.warning("Claude modelo %s falhou (%s). Tentando próximo...", model_name, e)
-
-    if _gemini_ok:
-        import google.generativeai as genai
-        for model_name in _GEMINI_MODELS:
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                logger.info("IA: Gemini respondeu com modelo %s.", model_name)
-                return response.text
-            except Exception as e:
-                logger.warning("Gemini modelo %s falhou (%s). Tentando próximo...", model_name, e)
-
     if _copilot_ok and _copilot:
         # Trunca o prompt para não exceder o limite de tokens do endpoint
         prompt_github = prompt[:_GITHUB_MAX_CHARS] if len(prompt) > _GITHUB_MAX_CHARS else prompt
@@ -258,7 +205,7 @@ async def _chamar_ia(prompt: str) -> str:
             except Exception as e:
                 logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
-    raise RuntimeError("Nenhuma IA disponível. Configure ANTHROPIC_API_KEY, GEMINI_API_KEY ou GITHUB_TOKEN.")
+    raise RuntimeError("Nenhuma IA disponível. Configure GITHUB_TOKEN.")
 
 
 # ---------------------------------------------------------------------------
@@ -430,12 +377,25 @@ def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
 
 
 async def confirmar_sessao(advogado: str, webhook_url: str):
+    mensagem, oferecer_email = await confirmar_sessao_data(advogado)
+    await send_webhook(webhook_url, mensagem)
+    if oferecer_email:
+        await send_webhook(
+            webhook_url,
+            (
+                f"📧 *{advogado}, deseja uma sugestão de e-mail de reporte ao cliente?*\n\n"
+                f"`/sim` — gerar sugestão de e-mail\n"
+                f"`/nao` — dispensar"
+            ),
+        )
+
+
+async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
     chave = _chave_sessao(advogado)
     sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
-        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para confirmar.")
-        return
+        return f"⚠️ *{advogado}*, não há análise pendente para confirmar.", False
     try:
         row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
@@ -450,38 +410,54 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
         await salvar_sessoes(sessoes)
 
         sigla = row.get("ADVOGADO", advogado)
-        await send_webhook(
-            webhook_url,
+        logger.info("Sessão confirmada para %s", advogado)
+        return (
             f"✅ *Decisão registrada com sucesso!*\n"
             f"📄 *Processo:* {row.get('NÚMERO DO PROCESSO', 'N/A')}\n"
             f"🏢 *Cliente:* {row.get('CLIENTE', 'N/A')}\n"
             f"📊 *Resultado:* {row.get('RESULTADO DA DECISÃO', 'N/A')}\n"
-            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
+            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_",
+            True,
         )
-        logger.info("Sessão confirmada para %s", advogado)
-
-        # Pergunta se deseja sugestão de e-mail
-        await send_webhook(
-            webhook_url,
-            f"📧 *{advogado}, deseja uma sugestão de e-mail de reporte ao cliente?*\n\n"
-            f"`/sim` — gerar sugestão de e-mail\n"
-            f"`/nao` — dispensar"
-        )
-
     except Exception as e:
         logger.exception("Erro ao salvar sessão: %s", e)
-        await send_webhook(webhook_url, "⚠️ Erro ao salvar na planilha. Tente `/confirmar` novamente.")
+        return "⚠️ Erro ao salvar na planilha. Tente confirmar novamente.", False
 
 
 async def cancelar_sessao(advogado: str, webhook_url: str):
+    await send_webhook(webhook_url, await cancelar_sessao_data(advogado))
+
+
+async def cancelar_sessao_data(advogado: str) -> str:
     chave = _chave_sessao(advogado)
     sessoes = await carregar_sessoes()
     if chave in sessoes:
         del sessoes[chave]
         await salvar_sessoes(sessoes)
-        await send_webhook(webhook_url, f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo.")
-    else:
-        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para cancelar.")
+        return f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo."
+    return f"⚠️ *{advogado}*, não há análise pendente para cancelar."
+
+
+async def marcar_aguardando_correcao(advogado: str) -> str:
+    chave = _chave_sessao(advogado)
+    sessoes = await carregar_sessoes()
+    row = sessoes.get(chave)
+    if not row:
+        return f"⚠️ *{advogado}*, não há análise pendente para corrigir."
+    row["_aguardando_correcao"] = True
+    sessoes[chave] = row
+    await salvar_sessoes(sessoes)
+    return (
+        f"✏️ *{advogado}*, me diga no chat o que você quer corrigir na análise.\n"
+        f"Exemplo: `resultado deve ser Desfavorável e TRT é TRT-2`"
+    )
+
+
+async def esta_aguardando_correcao(advogado: str) -> bool:
+    chave = _chave_sessao(advogado)
+    sessoes = await carregar_sessoes()
+    row = sessoes.get(chave) or {}
+    return bool(row.get("_aguardando_correcao"))
 
 
 # ---------------------------------------------------------------------------
@@ -539,21 +515,21 @@ def _montar_assunto_email(row: dict) -> str:
 
 
 async def gerar_email_sessao(advogado: str, webhook_url: str):
-    """Handler para /sim — gera o e-mail de reporte ao cliente."""
+    await send_webhook(webhook_url, await gerar_email_sessao_data(advogado))
+
+
+async def gerar_email_sessao_data(advogado: str) -> str:
+    """Gera o e-mail de reporte ao cliente a partir da sessão confirmada."""
     chave = _chave_sessao(advogado)
     chave_email = f"email_{chave}"
     sessoes = await carregar_sessoes()
     row = sessoes.get(chave_email)
 
     if not row:
-        await send_webhook(
-            webhook_url,
+        return (
             f"⚠️ *{advogado}*, não há decisão recente para gerar o e-mail.\n"
             f"Confirme uma decisão com `/confirmar` primeiro."
         )
-        return
-
-    await send_webhook(webhook_url, "✉️ *Gerando sugestão de e-mail...* Aguarde.")
 
     try:
         assunto = _montar_assunto_email(row)
@@ -579,7 +555,8 @@ async def gerar_email_sessao(advogado: str, webhook_url: str):
         del sessoes[chave_email]
         await salvar_sessoes(sessoes)
 
-        mensagem = (
+        logger.info("E-mail gerado para %s", advogado)
+        return (
             f"📧 *SUGESTÃO DE E-MAIL*\n\n"
             f"*Assunto:* {assunto}\n\n"
             f"{'─' * 40}\n\n"
@@ -587,16 +564,18 @@ async def gerar_email_sessao(advogado: str, webhook_url: str):
             f"{'─' * 40}\n"
             f"_Sugestão gerada automaticamente. Revise antes de enviar._"
         )
-        await send_webhook(webhook_url, mensagem)
-        logger.info("E-mail gerado para %s", advogado)
 
     except Exception as e:
         logger.exception("Erro ao gerar e-mail: %s", e)
-        await send_webhook(webhook_url, "⚠️ Erro ao gerar o e-mail. Tente `/sim` novamente.")
+        return "⚠️ Erro ao gerar o e-mail. Tente novamente."
 
 
 async def dispensar_email_sessao(advogado: str, webhook_url: str):
-    """Handler para /nao — descarta a oferta de e-mail."""
+    await send_webhook(webhook_url, await dispensar_email_sessao_data(advogado))
+
+
+async def dispensar_email_sessao_data(advogado: str) -> str:
+    """Descarta a oferta de e-mail da sessão confirmada."""
     chave = _chave_sessao(advogado)
     chave_email = f"email_{chave}"
     sessoes = await carregar_sessoes()
@@ -605,7 +584,7 @@ async def dispensar_email_sessao(advogado: str, webhook_url: str):
         del sessoes[chave_email]
         await salvar_sessoes(sessoes)
 
-    await send_webhook(webhook_url, f"👍 *{advogado}*, tudo certo! E-mail dispensado.")
+    return f"👍 *{advogado}*, tudo certo! E-mail dispensado."
 
 
 # ---------------------------------------------------------------------------
@@ -633,14 +612,16 @@ Mantenha todos os campos que não foram mencionados na correção."""
 
 
 async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
+    ok, mensagem = await corrigir_sessao_data(advogado, instrucao)
+    await send_webhook(webhook_url, mensagem)
+
+
+async def corrigir_sessao_data(advogado: str, instrucao: str) -> tuple[bool, str]:
     chave = _chave_sessao(advogado)
     sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
-        await send_webhook(webhook_url, f"⚠️ *{advogado}*, não há análise pendente para corrigir.")
-        return
-
-    await send_webhook(webhook_url, f"✏️ *Aplicando correção...* Aguarde.")
+        return False, f"⚠️ *{advogado}*, não há análise pendente para corrigir."
 
     try:
         # Monta JSON da análise atual para passar à IA
@@ -694,23 +675,29 @@ async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
         row_corrigido = _montar_row(analise_corrigida, sigla, hints)
         row_corrigido["_cliente_hint"] = hints["cliente"]
         row_corrigido["_tipo_hint"]    = hints["tipo"]
+        row_corrigido["_aguardando_correcao"] = False
         sessoes[chave] = row_corrigido
         await salvar_sessoes(sessoes)
 
         relatorio  = formatar_relatorio(analise_corrigida, sigla)
-        confirmacao = mensagem_confirmacao(advogado)
-        await send_webhook(webhook_url, relatorio + "\n\n" + confirmacao)
+        return True, relatorio
 
     except Exception as e:
         logger.exception("Erro ao corrigir sessão: %s", e)
-        await send_webhook(webhook_url, "⚠️ Erro ao aplicar correção. Tente novamente.")
+        return False, "⚠️ Erro ao aplicar correção. Tente novamente."
 
 
 # ---------------------------------------------------------------------------
 # HANDLERS PRINCIPAIS
 # ---------------------------------------------------------------------------
 
-async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhook_url: str) -> str:
+async def _analisar_e_aguardar(
+    texto_pdf: str,
+    advogado: str,
+    texto: str,
+    webhook_url: str,
+    include_confirmacao_text: bool = True,
+) -> str:
     sigla  = resolver_sigla(advogado)
     hints  = parse_mensagem(texto)
 
@@ -735,6 +722,7 @@ async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhoo
     row = _montar_row(analise, sigla, hints)
     row["_cliente_hint"] = hints["cliente"]
     row["_tipo_hint"]    = hints["tipo"]
+    row["_aguardando_correcao"] = False
     chave = _chave_sessao(advogado)
     sessoes = await carregar_sessoes()
     sessoes[chave] = row
@@ -743,12 +731,34 @@ async def _analisar_e_aguardar(texto_pdf: str, advogado: str, texto: str, webhoo
 
     # Retorna relatório + instrução de confirmação
     relatorio = formatar_relatorio(analise, sigla)
-    confirmacao = mensagem_confirmacao(advogado)
-    return relatorio + "\n\n" + confirmacao
+    if include_confirmacao_text:
+        confirmacao = mensagem_confirmacao(advogado)
+        return relatorio + "\n\n" + confirmacao
+    return relatorio
 
 
 async def processar_texto(texto_pdf: str, advogado: str, texto: str, webhook_url: str) -> str:
     return await _analisar_e_aguardar(texto_pdf, advogado, texto, webhook_url)
+
+
+async def processar_texto_chat(
+    texto_pdf: str,
+    advogado: str,
+    cliente: str,
+    tipo_responsabilidade: str,
+) -> str:
+    metadados = ""
+    if cliente:
+        metadados += f"Cliente: {cliente}\n"
+    if tipo_responsabilidade:
+        metadados += f"Tipo: {tipo_responsabilidade}"
+    return await _analisar_e_aguardar(
+        texto_pdf,
+        advogado,
+        metadados,
+        webhook_url="",
+        include_confirmacao_text=False,
+    )
 
 
 async def processar_pdf_bytes(pdf_bytes: bytes, advogado: str, texto: str, webhook_url: str) -> str:
