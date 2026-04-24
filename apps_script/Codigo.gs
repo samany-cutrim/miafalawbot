@@ -57,12 +57,24 @@ function onCardClick(e) {
     if (cliente) metadados += "Cliente: " + cliente + "\n";
     if (tipo) metadados += "Tipo: " + tipo;
 
-    chamarRender("/processar-texto", {
+    var resp = chamarRenderSync("/processar-texto-sync", {
       texto_pdf: decisao,
       advogado: userName,
-      texto: metadados,
-      webhook_url: WEBHOOK_URL
+      texto: metadados
     });
+
+    if (!resp || resp.status !== "ok" || !resp.resultado) {
+      return {
+        text: "Erro ao processar a decisao. Tente novamente."
+      };
+    }
+
+    var resultadoAnalise = String(resp.resultado);
+    var resultadoHtml = resultadoAnalise
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>");
 
     return {
       cardsV2: [
@@ -75,7 +87,7 @@ function onCardClick(e) {
                 widgets: [
                   {
                     textParagraph: {
-                      text: "Recebi sua decisao e iniciei a analise. O resultado sera publicado no chat em instantes."
+                      text: resultadoHtml
                     }
                   },
                   {
@@ -137,32 +149,6 @@ function onCardClick(e) {
       webhook_url: WEBHOOK_URL
     });
     return { text: "Buscando precedentes desfavoraveis na planilha..." };
-  }
-
-  if (invoked === "submit_busca_favoraveis") {
-    var temaFav = getFormInputValue(e, "tema_busca");
-    if (!temaFav) {
-      return { text: "Informe o tema da busca." };
-    }
-    chamarRender("/buscar", {
-      tipo: "favoraveis",
-      tema: temaFav,
-      webhook_url: WEBHOOK_URL
-    });
-    return { text: "Busca de favoraveis iniciada para: " + temaFav };
-  }
-
-  if (invoked === "submit_busca_desfavoraveis") {
-    var temaDes = getFormInputValue(e, "tema_busca");
-    if (!temaDes) {
-      return { text: "Informe o tema da busca." };
-    }
-    chamarRender("/buscar", {
-      tipo: "desfavoraveis",
-      tema: temaDes,
-      webhook_url: WEBHOOK_URL
-    });
-    return { text: "Busca de desfavoraveis iniciada para: " + temaDes };
   }
 
   if (invoked === "confirm_decision") {
@@ -799,8 +785,7 @@ function onFormSubmit(e) {
       muteHttpExceptions: true
     });
 
-    // Reforca as acoes em formato visual apos envio
-    enviarCardAcoesPosAnalise();
+    // No fluxo com formulario, aguarda a analise chegar antes de qualquer acao.
   } catch (err) {
     Logger.log("Erro onFormSubmit: " + err);
     chamarWebhook("Erro ao processar o formulario. Tente novamente.");
@@ -869,11 +854,11 @@ function processarComando(msg) {
     return;
   }
   if (tl === "/busca" || tl === "busca") {
-    enviarCardBuscaPrecedentes();
+    chamarWebhook("Use os botoes de busca no card do Chat App ou os comandos /favoraveis [tema] e /desfavoraveis [tema].");
     return;
   }
   if (tl === "/menu" || tl === "menu") {
-    enviarCardMenuPrincipal();
+    chamarWebhook("Use o menu do Chat App para abrir os botoes interativos.");
     return;
   }
   if (tl === "/ajuda" || tl === "ajuda") {
@@ -995,6 +980,28 @@ function chamarRender(endpoint, payload) {
     });
   } catch (e) {
     Logger.log("Erro chamarRender " + endpoint + ": " + e);
+  }
+}
+
+
+function chamarRenderSync(endpoint, payload) {
+  try {
+    var resp = UrlFetchApp.fetch(RENDER_URL + endpoint, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    var body = resp.getContentText();
+    if (code >= 200 && code < 300) {
+      return JSON.parse(body || "{}");
+    }
+    Logger.log("Erro chamarRenderSync " + endpoint + ": " + code + " " + body);
+    return null;
+  } catch (e) {
+    Logger.log("Erro chamarRenderSync " + endpoint + ": " + e);
+    return null;
   }
 }
 

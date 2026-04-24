@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # GitHub Copilot (via openai SDK)
 _copilot = None
 _copilot_ok = False
+_cached_model_order: list[str] | None = None
 if GITHUB_TOKEN:
     try:
         from openai import AsyncOpenAI
@@ -177,13 +178,84 @@ _GITHUB_MODELS = [
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
+
+async def _resolver_modelos_github() -> list[str]:
+    """Resolve os modelos permitidos pela conta, priorizando Claude e Gemini.
+    Nunca inclui GPT.
+    """
+    global _cached_model_order
+
+    if _cached_model_order:
+        return _cached_model_order
+
+    modelos_disponiveis: list[str] = []
+    if _copilot_ok and _copilot:
+        try:
+            resposta = await _copilot.models.list()
+            modelos_disponiveis = [m.id for m in resposta.data]
+            logger.info("Modelos disponíveis no endpoint: %s", ", ".join(modelos_disponiveis))
+        except Exception as e:
+            logger.warning("Falha ao listar modelos do endpoint (%s).", e)
+
+    # Se a listagem falhar, usa fallback estático configurado.
+    if not modelos_disponiveis:
+        _cached_model_order = list(_GITHUB_MODELS)
+        return _cached_model_order
+
+    lower_map = {m.lower(): m for m in modelos_disponiveis}
+
+    claude = [lower_map[k] for k in lower_map if "claude" in k]
+    gemini = [lower_map[k] for k in lower_map if "gemini" in k]
+
+    # Ordena por preferência quando existir correspondência parcial.
+    def _ordenar_preferencia(candidatos: list[str], preferencias: list[str]) -> list[str]:
+        ordenados: list[str] = []
+        usados = set()
+        for pref in preferencias:
+            pref_l = pref.lower()
+            for c in candidatos:
+                if c in usados:
+                    continue
+                if pref_l in c.lower() or c.lower() in pref_l:
+                    ordenados.append(c)
+                    usados.add(c)
+        for c in candidatos:
+            if c not in usados:
+                ordenados.append(c)
+        return ordenados
+
+    claude = _ordenar_preferencia(claude, [
+        "claude-3-7-sonnet",
+        "claude-3.7-sonnet",
+        "claude-3-5-sonnet",
+        "claude-3.5-sonnet",
+        "claude-3-5-haiku",
+        "claude-3.5-haiku",
+    ])
+    gemini = _ordenar_preferencia(gemini, [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+    ])
+
+    _cached_model_order = claude + gemini
+    return _cached_model_order
+
 async def _chamar_ia(prompt: str) -> str:
     if _copilot_ok and _copilot:
+        modelos = await _resolver_modelos_github()
+        if not modelos:
+            raise RuntimeError(
+                "Nenhum modelo Claude/Gemini disponível no endpoint da conta. "
+                "Verifique permissões do GITHUB_TOKEN em GitHub Models."
+            )
+
         # Trunca o prompt para não exceder o limite de tokens do endpoint
         prompt_github = prompt[:_GITHUB_MAX_CHARS] if len(prompt) > _GITHUB_MAX_CHARS else prompt
         if len(prompt) > _GITHUB_MAX_CHARS:
             logger.warning("Prompt truncado de %d para %d chars para GitHub Copilot.", len(prompt), _GITHUB_MAX_CHARS)
-        for model_name in _GITHUB_MODELS:
+        for model_name in modelos:
             try:
                 response = await _copilot.chat.completions.create(
                     model=model_name,
@@ -205,7 +277,10 @@ async def _chamar_ia(prompt: str) -> str:
             except Exception as e:
                 logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
-    raise RuntimeError("Nenhuma IA disponível. Configure GITHUB_TOKEN.")
+    raise RuntimeError(
+        "Nenhuma IA disponível no endpoint com modelos Claude/Gemini. "
+        "Confirme o GITHUB_TOKEN e os modelos liberados para a conta."
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "mia-falaw-bot"}
+
+
 # ---------------------------------------------------------------------------
 # REQUEST MODELS (Apps Script / Webhook)
 # ---------------------------------------------------------------------------
@@ -76,6 +81,12 @@ class TextoRequest(BaseModel):
     advogado: str
     texto: str = ""
     webhook_url: str
+
+
+class TextoSyncRequest(BaseModel):
+    texto_pdf: str
+    advogado: str
+    texto: str = ""
 
 
 class BuscaRequest(BaseModel):
@@ -180,6 +191,17 @@ async def nao(req: NaoRequest):
 async def processar_texto_endpoint(req: TextoRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(_run_texto, req)
     return JSONResponse({"status": "processando"})
+
+
+@app.post("/processar-texto-sync")
+async def processar_texto_sync(req: TextoSyncRequest):
+    """Processa texto de forma síncrona para uso no fluxo do Chat App modal."""
+    try:
+        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, webhook_url="")
+        return JSONResponse({"status": "ok", "resultado": resultado})
+    except Exception as e:
+        logger.exception("Erro ao processar texto (sync): %s", e)
+        return JSONResponse({"status": "erro", "mensagem": "Erro ao processar a decisão."}, status_code=500)
 
 
 @app.post("/processar-base64")
