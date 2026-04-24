@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 _copilot = None
 _copilot_ok = False
 _cached_model_order: list[str] | None = None
+_invalid_models: set[str] = set()
+_last_success_model: str | None = None
 if GITHUB_TOKEN:
     try:
         from openai import AsyncOpenAI
@@ -171,10 +173,22 @@ def extrair_trt_do_processo(numero: str) -> str:
 # Limite de input: ~8000 tokens ≈ 24000 chars
 _GITHUB_MODELS = [
     "claude-3-7-sonnet",
+    "claude-3.7-sonnet",
+    "claude-sonnet-4",
+    "claude-4-sonnet",
+    "claude-4.0-sonnet",
     "claude-3-5-sonnet",
+    "claude-3.5-sonnet",
     "claude-3-5-haiku",
+    "claude-3.5-haiku",
+    "claude-3-haiku",
+    "claude-3-opus",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
@@ -243,12 +257,23 @@ async def _resolver_modelos_github() -> list[str]:
     return _cached_model_order
 
 async def _chamar_ia(prompt: str) -> str:
+    global _last_success_model
+
+    def _is_unknown_model_error(err: Exception) -> bool:
+        msg = str(err).lower()
+        return "unknown_model" in msg or "unknown model" in msg
+
     if _copilot_ok and _copilot:
         modelos = await _resolver_modelos_github()
+        modelos = [m for m in modelos if m not in _invalid_models]
+
+        if _last_success_model and _last_success_model in modelos:
+            modelos = [_last_success_model] + [m for m in modelos if m != _last_success_model]
+
         if not modelos:
             raise RuntimeError(
-                "Nenhum modelo Claude/Gemini disponível no endpoint da conta. "
-                "Verifique permissões do GITHUB_TOKEN em GitHub Models."
+                "Nenhum modelo Claude/Gemini válido disponível no endpoint da conta. "
+                "Use /debug-models para verificar os modelos liberados para o GITHUB_TOKEN."
             )
 
         # Trunca o prompt para não exceder o limite de tokens do endpoint
@@ -273,13 +298,16 @@ async def _chamar_ia(prompt: str) -> str:
                     ],
                 )
                 logger.info("IA: GitHub Copilot respondeu com modelo %s.", model_name)
+                _last_success_model = model_name
                 return response.choices[0].message.content or ""
             except Exception as e:
+                if _is_unknown_model_error(e):
+                    _invalid_models.add(model_name)
                 logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     raise RuntimeError(
         "Nenhuma IA disponível no endpoint com modelos Claude/Gemini. "
-        "Confirme o GITHUB_TOKEN e os modelos liberados para a conta."
+        "Confirme o GITHUB_TOKEN e os modelos liberados para a conta (verifique /debug-models)."
     )
 
 
