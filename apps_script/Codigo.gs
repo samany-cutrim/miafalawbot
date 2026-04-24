@@ -77,6 +77,7 @@ function onCardClick(e) {
       .replace(/\n/g, "<br>");
 
     return {
+      actionResponse: { type: "NEW_MESSAGE" },
       cardsV2: [
         {
           cardId: "analise_iniciada",
@@ -129,26 +130,37 @@ function onCardClick(e) {
     };
   }
 
-  if (invoked === "buscar_favoraveis") {
-    chamarRender("/buscar", {
-      tipo: "favoraveis",
-      tema: "todos",
-      webhook_url: WEBHOOK_URL
-    });
-    return { text: "Buscando precedentes favoraveis na planilha..." };
+  if (invoked === "buscar_favoraveis" || invoked === "buscar_desfavoraveis") {
+    var tipoBusca = (invoked === "buscar_favoraveis") ? "favoraveis" : "desfavoraveis";
+    var labelBusca = (tipoBusca === "favoraveis") ? "Favoraveis" : "Desfavoraveis";
+    var respBusca = chamarRenderSync("/buscar-sync", { tipo: tipoBusca, tema: "todos" });
+    var textoBusca;
+    if (!respBusca || respBusca.status !== "ok") {
+      textoBusca = "Erro ao buscar precedentes. Tente novamente.";
+    } else {
+      textoBusca = String(respBusca.resultado || "Nenhum precedente encontrado.")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br>");
+    }
+    return {
+      cardsV2: [{
+        cardId: "busca_resultado",
+        card: {
+          header: getBaseCardHeader("Precedentes " + labelBusca),
+          sections: [{
+            widgets: [{
+              textParagraph: { text: textoBusca }
+            }]
+          }]
+        }
+      }]
+    };
   }
 
   if (invoked === "open_busca_card") {
     return respostaCardChatAppBusca();
-  }
-
-  if (invoked === "buscar_desfavoraveis") {
-    chamarRender("/buscar", {
-      tipo: "desfavoraveis",
-      tema: "todos",
-      webhook_url: WEBHOOK_URL
-    });
-    return { text: "Buscando precedentes desfavoraveis na planilha..." };
   }
 
   if (invoked === "confirm_decision") {

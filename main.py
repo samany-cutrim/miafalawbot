@@ -96,6 +96,11 @@ class BuscaRequest(BaseModel):
     webhook_url: str
 
 
+class BuscaSyncRequest(BaseModel):
+    tipo: str
+    tema: str
+
+
 class AjudaRequest(BaseModel):
     webhook_url: str
 
@@ -156,6 +161,17 @@ async def buscar(req: BuscaRequest):
         logger.exception("Erro na busca: %s", e)
         await send_webhook(req.webhook_url, "⚠️ Erro ao buscar precedentes.")
     return JSONResponse({"status": "ok"})
+
+
+@app.post("/buscar-sync")
+async def buscar_sync(req: BuscaSyncRequest):
+    """Retorna resultado da busca diretamente, sem webhook (para o Chat App modal)."""
+    try:
+        resultado = await processar_busca(req.tipo, req.tema)
+        return JSONResponse({"status": "ok", "resultado": resultado})
+    except Exception as e:
+        logger.exception("Erro na busca sync: %s", e)
+        return JSONResponse({"status": "erro", "mensagem": "Erro ao buscar precedentes."}, status_code=500)
 
 
 @app.post("/confirmar")
