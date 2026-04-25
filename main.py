@@ -512,16 +512,26 @@ async def _handle_card_click(event: dict) -> dict:
 @app.post("/chat")
 async def chat_event(event: dict):
     event_type = event.get("type", "")
+    logger.info("[/chat] tipo=%s user=%s", event_type, (event.get("user") or event.get("message", {}).get("sender") or {}).get("displayName", "?"))
 
     if event_type == "ADDED_TO_SPACE":
         return _cards_response([_home_card()])
 
     if event_type == "MESSAGE":
-        return await _handle_message(event)
+        try:
+            return await _handle_message(event)
+        except Exception as exc:
+            logger.exception("[/chat] erro em _handle_message: %s", exc)
+            return _cards_response([_home_card()])
 
     if event_type == "CARD_CLICKED":
-        return await _handle_card_click(event)
+        try:
+            return await _handle_card_click(event)
+        except Exception as exc:
+            logger.exception("[/chat] erro em _handle_card_click: %s", exc)
+            return _text_response("Ocorreu um erro. Tente novamente.")
 
+    logger.warning("[/chat] evento nao tratado: %s | payload: %s", event_type, str(event)[:500])
     return _text_response("Evento nao suportado.")
 
 
