@@ -700,8 +700,7 @@ async def chat_event(event: dict):
                 logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
                 return _new_format_text("Ocorreu um erro. Tente novamente.")
 
-        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: %s", list(message_payload.keys()))
-        return _new_format_cards([_home_card()])
+        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:2000])\n        return _new_format_cards([_home_card()])
 
     # Evento de autorização sem payload (verificação inicial)
     if "authorizationEventObject" in event:
