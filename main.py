@@ -536,7 +536,7 @@ async def chat_event(event: dict):
                     return _cards_response([_analysis_actions_card(msg)])
             except Exception as exc:
                 logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return _cards_response([_home_card()])
+            return _text_response("Ola! Bot funcionando. Retornando card em breve.")
 
         # CARD_CLICKED
         button_payload = message_payload.get("buttonClickedPayload") or {}
