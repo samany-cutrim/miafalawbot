@@ -645,12 +645,30 @@ async def _handle_card_click_new(advogado: str, function_name: str, event: dict)
 
 @app.post("/chat")
 async def chat_event(event: dict):
-    # Log completo para diagnóstico
     chat_data = event.get("chat") or {}
-    chat_keys = list(chat_data.keys())
-    logger.info("[/chat] EVENTO COMPLETO: %s", str(event)[:3000])
-
+    common = event.get("commonEventObject") or {}
     message_payload = chat_data.get("messagePayload") or {}
+
+    # CARD_CLICKED: para Add-ons, function fica em commonEventObject.invokedFunction
+    invoked_function = common.get("invokedFunction") or ""
+    if invoked_function:
+        user_info = chat_data.get("user") or {}
+        advogado = user_info.get("displayName") or "Advogado"
+        # formInputs fica em commonEventObject.formInputs
+        raw_form = common.get("formInputs") or {}
+        compat_form = {
+            k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
+            for k, v in raw_form.items()
+        }
+        compat_event = {"user": user_info, "common": {"invokedFunction": invoked_function, "formInputs": compat_form}}
+        logger.info("[/chat] CARD_CLICKED user=%s function=%s form_keys=%s", advogado, invoked_function, list(compat_form.keys()))
+        try:
+            return await _handle_card_click_new(advogado, invoked_function, compat_event)
+        except Exception as exc:
+            logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
+            return _update_text_response("Ocorreu um erro. Tente novamente.")
+
+    logger.info("[/chat] keys=%s payload_keys=%s", list(event.keys()), list(message_payload.keys()))
 
     # Novo formato: dados em event['chat']['messagePayload']
     if chat_data and message_payload:
