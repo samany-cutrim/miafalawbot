@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v8 iniciado.")
+    logger.info("Mia Falaw Bot v9 iniciado.")
     yield
 
 
@@ -89,7 +89,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v8"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v9"}
 
 
 # ---------------------------------------------------------------------------
@@ -179,25 +179,50 @@ def _message_text_and_cards(text: str, cards: list[dict]) -> dict:
 
 # Respostas para CARD_CLICKED
 def _update_message_cards(cards: list[dict]) -> dict:
-    return {"actionResponse": {"type": "UPDATE_MESSAGE"}, "cardsV2": cards}
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "updateMessageAction": {
+                    "message": {"cardsV2": cards}
+                }
+            }
+        }
+    }
 
 
 def _new_message_cards(cards: list[dict]) -> dict:
-    return {"actionResponse": {"type": "NEW_MESSAGE"}, "cardsV2": cards}
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"cardsV2": cards}
+                }
+            }
+        }
+    }
 
 
 def _new_message_text(text: str) -> dict:
-    return {"actionResponse": {"type": "NEW_MESSAGE"}, "text": text}
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"text": text}
+                }
+            }
+        }
+    }
 
 
 def _dialog_action_response(dialog_body: dict) -> dict:
     return {
-        "actionResponse": {
-            "type": "DIALOG",
-            "dialogAction": {
-                "actionStatus": {"statusCode": "OK"},
-                "dialog": {"body": dialog_body},
-            },
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "openDialogAction": {
+                    "actionStatus": {"statusCode": "OK"},
+                    "dialog": {"body": dialog_body},
+                }
+            }
         }
     }
 
@@ -576,10 +601,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                 cliente=cliente,
                 tipo_responsabilidade=tipo,
             )
-            return {
-                "actionResponse": {"type": "NEW_MESSAGE"},
-                "cardsV2": [_analysis_actions_card(resultado)],
-            }
+            return _new_message_cards([_analysis_actions_card(resultado)])
         except Exception as exc:
             logger.exception("[CARD_CLICK] erro submit_decision: %s", exc)
             return _new_message_text("⚠️ Erro ao processar a decisão. Tente novamente.")
@@ -760,7 +782,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v8"}
+    return {"status": "ok", "version": "mia-falaw-bot-v9"}
 
 
 @app.get("/debug-models")
