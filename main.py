@@ -479,65 +479,38 @@ def _dialog_response() -> dict:
 
 
 def _text_response(text: str) -> dict:
-    return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"text": text}
-                }
-            }
-        }
-    }
+    return {"text": text}
 
 
 def _cards_response(cards: list[dict]) -> dict:
-    return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"cardsV2": cards}
-                }
-            }
-        }
-    }
+    return {"cardsV2": cards}
 
 
 def _update_cards_response(cards: list[dict]) -> dict:
-    """Usado em CARD_CLICKED para enviar novo card."""
+    """Usado em CARD_CLICKED para atualizar card existente."""
     return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"cardsV2": cards}
-                }
-            }
-        }
+        "actionResponse": {"type": "UPDATE_MESSAGE"},
+        "cardsV2": cards,
     }
 
 
 def _update_text_response(text: str) -> dict:
     """Usado em CARD_CLICKED para responder com texto."""
     return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"text": text}
-                }
-            }
-        }
+        "actionResponse": {"type": "NEW_MESSAGE"},
+        "text": text,
     }
 
 
 def _dialog_action_response(dialog_body: dict) -> dict:
     """Abre um dialog em resposta a CARD_CLICKED."""
     return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "openDialogAction": {
-                    "actionStatus": {"statusCode": "OK"},
-                    "dialog": {"body": dialog_body},
-                }
-            }
+        "actionResponse": {
+            "type": "DIALOG",
+            "dialogAction": {
+                "actionStatus": {"statusCode": "OK"},
+                "dialog": {"body": dialog_body},
+            },
         }
     }
 
