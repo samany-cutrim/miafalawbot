@@ -62,6 +62,9 @@ async def _verificar_token_google(request: Request) -> bool:
 
 
 from bot.config import GITHUB_TOKEN
+
+# URL do endpoint — obrigatório para action.function em Workspace Add-on
+ENDPOINT_URL = "https://mia-falaw-bot.onrender.com/chat"
 from bot.handlers import (
     cancelar_sessao_data,
     confirmar_sessao_data,
@@ -80,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v9 iniciado.")
+    logger.info("Mia Falaw Bot v10 iniciado.")
     yield
 
 
@@ -89,7 +92,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v9"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v10"}
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +116,12 @@ def _base_header(subtitle: str) -> dict:
 
 
 def _primary_button(label: str, function_name: str, parameters: list | None = None) -> dict:
-    action: dict = {"function": function_name}
+    # Workspace Add-on: action.function deve ser URL completa
+    # O nome da função vai como parâmetro __method
+    params = [{"key": "__method", "value": function_name}]
     if parameters:
-        action["parameters"] = parameters
+        params.extend(parameters)
+    action: dict = {"function": ENDPOINT_URL, "parameters": params}
     return {"text": label, "onClick": {"action": action}}
 
 
@@ -700,14 +706,17 @@ async def chat_event(request: Request):
             k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
             for k, v in raw_form.items()
         }
+        # Workspace Add-on: nome real da função está nos parâmetros como __method
+        raw_params = common.get("parameters") or {}
+        function_name = raw_params.get("__method") or invoked_function
         compat_event = {
             "user": user_info,
-            "common": {"invokedFunction": invoked_function, "formInputs": compat_form},
+            "common": {"invokedFunction": function_name, "formInputs": compat_form},
         }
         logger.info("[/chat] CARD_CLICKED user=%s fn=%s form=%s",
-                    advogado, invoked_function, list(compat_form.keys()))
+                    advogado, function_name, list(compat_form.keys()))
         try:
-            result = await _handle_card_click(advogado, invoked_function, compat_event)
+            result = await _handle_card_click(advogado, function_name, compat_event)
             return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
@@ -782,7 +791,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v9"}
+    return {"status": "ok", "version": "mia-falaw-bot-v10"}
 
 
 @app.get("/debug-models")
