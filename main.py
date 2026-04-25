@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v19 iniciado.")
+    logger.info("Mia Falaw Bot v20 iniciado.")
     yield
 
 
@@ -96,7 +96,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v19"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v20"}
 
 
 # ---------------------------------------------------------------------------
@@ -573,8 +573,18 @@ async def _handle_message(event: dict) -> dict:
             )
             if pdf_url and pdf_url.startswith("http"):
                 cliente, tipo = await _get_hints_pdf(advogado)
+                # Pega o token OAuth do usuário para download autenticado
+                auth_event = event.get("authorizationEventObject") or {}
+                user_token = auth_event.get("userOAuthToken") or ""
                 try:
-                    pdf_bytes = await download_pdf(pdf_url)
+                    import httpx as _httpx
+                    headers = {}
+                    if user_token:
+                        headers["Authorization"] = f"Bearer {user_token}"
+                    async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as client_http:
+                        resp = await client_http.get(pdf_url, headers=headers)
+                        resp.raise_for_status()
+                        pdf_bytes = resp.content
                     texto_pdf = extrair_texto_pdf(pdf_bytes)
                     resultado = await processar_texto_chat(
                         texto_pdf=texto_pdf,
@@ -860,7 +870,7 @@ async def chat_event(request: Request):
         texto = (message.get("argumentText") or message.get("text") or "").strip()
         logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
         try:
-            result = await _handle_message({"user": user_info, "message": message})
+            result = await _handle_message({"user": user_info, "message": message, "authorizationEventObject": event.get("authorizationEventObject") or {}})
             logger.info("[/chat] MESSAGE response: %s", json.dumps(result, ensure_ascii=False)[:500])
             return JSONResponse(result)
         except Exception as exc:
@@ -888,7 +898,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v19"}
+    return {"status": "ok", "version": "mia-falaw-bot-v20"}
 
 
 @app.get("/debug-models")
