@@ -24,6 +24,24 @@ function onAddToSpace(e) {
 
 function onMessage(e) {
   var text = ((e.message && e.message.text) || "").trim().toLowerCase();
+
+  // --- Detecta anexo PDF na mensagem ---
+  var attachments = (e.message && e.message.attachment) ? e.message.attachment : [];
+  var pdfAttachment = null;
+  for (var i = 0; i < attachments.length; i++) {
+    var att = attachments[i];
+    var contentType = (att.contentType || "").toLowerCase();
+    var contentName = (att.contentName || att.name || "").toLowerCase();
+    if (contentType === "application/pdf" || contentName.indexOf(".pdf") !== -1) {
+      pdfAttachment = att;
+      break;
+    }
+  }
+
+  if (pdfAttachment) {
+    return _processarPdfNoAppsScript(e, pdfAttachment);
+  }
+
   if (text === "/menu" || text === "menu" || text === "/ajuda" || text === "ajuda") {
     return respostaCardChatAppMenu();
   }
@@ -31,6 +49,93 @@ function onMessage(e) {
     return respostaCardChatAppBusca();
   }
   return respostaCardChatAppMenu();
+}
+
+
+/**
+ * Baixa o PDF anexado usando o token OAuth do usuário (ScriptApp.getOAuthToken),
+ * extrai o texto via pdfplumber no Render e retorna o resultado da análise.
+ *
+ * Esta abordagem contorna a limitação da Service Account externa que não pode
+ * chamar chat.googleapis.com/v1/media sem ser um Chat App nativo registrado.
+ */
+function _processarPdfNoAppsScript(e, pdfAttachment) {
+  try {
+    var userName = (e.user && e.user.displayName) ? e.user.displayName : "Advogado";
+
+    // 1. Obtém token OAuth do usuário logado no Add-on
+    var token = ScriptApp.getOAuthToken();
+
+    // 2. Monta URL de download usando o resourceName do attachmentDataRef
+    var dataRef = pdfAttachment.attachmentDataRef || {};
+    var resourceName = dataRef.resourceName || "";
+
+    if (!resourceName) {
+      return { text: "⚠️ Não consegui identificar o arquivo. Tente enviar o PDF novamente." };
+    }
+
+    var downloadUrl = "https://chat.googleapis.com/v1/media/" + resourceName + "?alt=media";
+
+    // 3. Baixa o PDF como bytes usando o token OAuth do usuário
+    var resp = UrlFetchApp.fetch(downloadUrl, {
+      headers: { "Authorization": "Bearer " + token },
+      muteHttpExceptions: true
+    });
+
+    if (resp.getResponseCode() !== 200) {
+      Logger.log("Erro download PDF: " + resp.getResponseCode() + " " + resp.getContentText().substring(0, 300));
+      return { text: "⚠️ Não consegui baixar o PDF (HTTP " + resp.getResponseCode() + "). Tente reenviar." };
+    }
+
+    var pdfBytes = resp.getContent(); // array de bytes
+    var pdfBase64 = Utilities.base64Encode(pdfBytes);
+
+    // 4. Envia base64 para o Render extrair o texto e analisar
+    var renderResp = UrlFetchApp.fetch(RENDER_URL + "/processar-pdf-base64", {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({
+        pdf_base64: pdfBase64,
+        advogado: userName,
+        filename: pdfAttachment.contentName || "decisao.pdf"
+      }),
+      muteHttpExceptions: true
+    });
+
+    if (renderResp.getResponseCode() !== 200) {
+      Logger.log("Erro Render PDF: " + renderResp.getResponseCode() + " " + renderResp.getContentText().substring(0, 300));
+      return { text: "⚠️ Erro ao processar o PDF no servidor. Tente novamente." };
+    }
+
+    var resultado = JSON.parse(renderResp.getContentText());
+    if (!resultado || resultado.status !== "ok") {
+      return { text: "⚠️ Erro na análise: " + (resultado.erro || "resposta inválida") };
+    }
+
+    // 5. Retorna o resultado formatado como card
+    var textoHtml = String(resultado.resultado || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>");
+
+    return {
+      actionResponse: { type: "NEW_MESSAGE" },
+      cardsV2: [{
+        cardId: "analise_resultado",
+        card: {
+          header: getBaseCardHeader("✅ Análise concluída"),
+          sections: [{
+            widgets: [{ textParagraph: { text: textoHtml } }]
+          }]
+        }
+      }]
+    };
+
+  } catch (err) {
+    Logger.log("Erro _processarPdfNoAppsScript: " + err);
+    return { text: "⚠️ Erro interno ao processar o PDF: " + err.message };
+  }
 }
 
 
