@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v14 iniciado.")
+    logger.info("Mia Falaw Bot v16 iniciado.")
     yield
 
 
@@ -92,7 +92,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v14"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v16"}
 
 
 # ---------------------------------------------------------------------------
@@ -115,13 +115,15 @@ def _base_header(subtitle: str) -> dict:
     return {"title": "Mia Falaw Bot", "subtitle": subtitle}
 
 
-def _primary_button(label: str, function_name: str, parameters: list | None = None) -> dict:
+def _primary_button(label: str, function_name: str, parameters: list | None = None, open_dialog: bool = False) -> dict:
     # Workspace Add-on: action.function deve ser URL completa
     # O nome da função vai como parâmetro __method
     params = [{"key": "__method", "value": function_name}]
     if parameters:
         params.extend(parameters)
     action: dict = {"function": ENDPOINT_URL, "parameters": params}
+    if open_dialog:
+        action["interaction"] = "OPEN_DIALOG"
     return {"text": label, "onClick": {"action": action}}
 
 
@@ -221,15 +223,11 @@ def _new_message_text(text: str) -> dict:
 
 
 def _dialog_action_response(dialog_body: dict) -> dict:
-    # Chat Add-on: abre dialog via hostAppDataAction > openDialogAction
+    # Workspace Add-on Chat: dialog via renderActions > pushCard na raiz
     return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "openDialogAction": {
-                    "dialog": {
-                        "body": dialog_body
-                    }
-                }
+        "renderActions": {
+            "action": {
+                "navigations": [{"pushCard": dialog_body}]
             }
         }
     }
@@ -251,7 +249,7 @@ def _home_card() -> dict:
                         {
                             "buttonList": {
                                 "buttons": [
-                                    _primary_button("Enviar decisão", "open_decision_dialog"),
+                                    _primary_button("Enviar decisão", "open_decision_dialog", open_dialog=True),
                                     _primary_button("Busca de precedentes", "open_busca_card"),
                                     _primary_button("Ajuda", "open_ajuda"),
                                 ]
@@ -362,7 +360,7 @@ def _ajuda_card() -> dict:
                         {
                             "buttonList": {
                                 "buttons": [
-                                    _primary_button("Enviar decisão", "open_decision_dialog"),
+                                    _primary_button("Enviar decisão", "open_decision_dialog", open_dialog=True),
                                     _primary_button("Busca de precedentes", "open_busca_card"),
                                     _primary_button("◀ Menu", "open_home"),
                                 ]
@@ -806,7 +804,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v14"}
+    return {"status": "ok", "version": "mia-falaw-bot-v16"}
 
 
 @app.get("/debug-models")
