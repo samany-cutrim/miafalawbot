@@ -347,12 +347,78 @@ def _home_card() -> dict:
                     "widgets": [
                         {
                             "textParagraph": {
-                                "text": "Clique em <b>Enviar decisao</b> para abrir o modal e iniciar a analise."
+                                "text": "Selecione uma opcao abaixo:"
                             }
                         },
                         {
                             "buttonList": {
-                                "buttons": [_primary_button("Enviar decisao", "open_decision_dialog")]
+                                "buttons": [
+                                    _primary_button("Enviar decisao", "open_decision_dialog"),
+                                    _primary_button("Busca de precedentes", "open_busca_card"),
+                                    _primary_button("Ajuda", "open_ajuda"),
+                                ]
+                            }
+                        },
+                    ]
+                }
+            ],
+        },
+    }
+
+
+def _busca_card() -> dict:
+    return {
+        "cardId": "busca",
+        "card": {
+            "header": _base_header("Busca de precedentes"),
+            "sections": [
+                {
+                    "widgets": [
+                        {
+                            "textInput": {
+                                "name": "tema_busca",
+                                "label": "Empresa ou tema",
+                                "type": "SINGLE_LINE",
+                                "hintText": "Ex: Magazine Luiza, terceirizacao, acidente de trabalho",
+                            }
+                        },
+                        {
+                            "buttonList": {
+                                "buttons": [
+                                    _primary_button("Favoraveis", "buscar_favoraveis"),
+                                    _primary_button("Desfavoraveis", "buscar_desfavoraveis"),
+                                ]
+                            }
+                        },
+                    ]
+                }
+            ],
+        },
+    }
+
+
+def _ajuda_card() -> dict:
+    return {
+        "cardId": "ajuda",
+        "card": {
+            "header": _base_header("Como usar o Mia Falaw Bot"),
+            "sections": [
+                {
+                    "widgets": [
+                        {
+                            "textParagraph": {
+                                "text": (
+                                    "<b>Enviar decisao:</b> Clique no botao, preencha o modal com o texto da decisao e envie para analise.\n\n"
+                                    "<b>Busca de precedentes:</b> Clique no botao, informe a empresa ou tema e escolha Favoraveis ou Desfavoraveis.\n\n"
+                                    "<b>Corrigir analise:</b> Apos uma analise, marque <b>@Mia Falaw Bot</b> e escreva a instrucao de correcao (ex: <i>resultado deve ser Desfavoravel</i>).\n\n"
+                                    "<b>Confirmar / Cancelar:</b> Apos a analise, use os botoes para confirmar e salvar ou cancelar.\n\n"
+                                    "<b>E-mail:</b> Ao confirmar, escolha se deseja gerar sugestao de e-mail para o cliente."
+                                )
+                            }
+                        },
+                        {
+                            "buttonList": {
+                                "buttons": [_primary_button("Voltar ao menu", "open_home")]
                             }
                         },
                     ]
@@ -477,17 +543,31 @@ def _new_format_cards(cards: list[dict]) -> dict:
 
 async def _handle_message(event: dict) -> dict:
     advogado = _user_name(event)
-    texto = _message_text(event)
+    texto = _message_text(event).lower()
 
     if await esta_aguardando_correcao(advogado):
         if not texto:
-            return _text_response("Informe no chat a instrucao de correcao.")
+            return _new_format_text("Informe no chat a instrucao de correcao.")
         ok, msg = await corrigir_sessao_data(advogado, texto)
         if not ok:
-            return _text_response(msg)
-        return _cards_response([_analysis_actions_card(msg)])
+            return _new_format_text(msg)
+        return _new_format_cards([_analysis_actions_card(msg)])
 
-    return _cards_response([_home_card()])
+    # Busca por mencao direta (@bot favoraveis/desfavoraveis <tema>)
+    import re
+    match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto)
+    match_des = re.search(r'desfavor[aá]veis?\s+(.+)', texto)
+    if match_fav or match_des:
+        tipo = "favoravel" if match_fav else "desfavoravel"
+        tema = (match_fav or match_des).group(1).strip()
+        try:
+            resultado = await processar_busca(tipo, tema)
+            return _new_format_cards([_card_with_buttons(f"Precedentes {tipo}", resultado, [], "busca_resultado")])
+        except Exception as exc:
+            logger.exception("[/chat] erro busca mencao: %s", exc)
+            return _new_format_text("Erro ao buscar precedentes.")
+
+    return _new_format_cards([_home_card()])
 
 
 async def _handle_card_click(event: dict) -> dict:
@@ -499,6 +579,29 @@ async def _handle_card_click(event: dict) -> dict:
 
 async def _handle_card_click_new(advogado: str, function_name: str, event: dict) -> dict:
     """Logica de card click com respostas no novo formato."""
+    if function_name == "open_home":
+        return _new_format_cards([_home_card()])
+
+    if function_name == "open_ajuda":
+        return _new_format_cards([_ajuda_card()])
+
+    if function_name == "open_busca_card":
+        return _new_format_cards([_busca_card()])
+
+    if function_name in ("buscar_favoraveis", "buscar_desfavoraveis"):
+        tema = _form_value(event, "tema_busca")
+        if not tema:
+            return _new_format_text("Informe a empresa ou tema no campo de busca.")
+        tipo = "favoravel" if function_name == "buscar_favoraveis" else "desfavoravel"
+        try:
+            resultado = await processar_busca(tipo, tema)
+            return _new_format_cards([
+                _card_with_buttons(f"Precedentes {tipo}", resultado, [_primary_button("Nova busca", "open_busca_card"), _primary_button("Menu", "open_home")], "busca_resultado")
+            ])
+        except Exception as exc:
+            logger.exception("[/chat] erro busca: %s", exc)
+            return _new_format_text("Erro ao buscar precedentes.")
+
     if function_name == "open_decision_dialog":
         return _dialog_response()
 
@@ -572,14 +675,23 @@ async def chat_event(event: dict):
         # CARD_CLICKED
         button_payload = message_payload.get("buttonClickedPayload") or {}
         if button_payload:
-            function_name = (button_payload.get("action") or {}).get("function") or ""
-            form_inputs = (button_payload.get("action") or {}).get("parameters") or []
+            logger.info("[/chat] CARD_CLICKED payload completo: %s", str(button_payload)[:1000])
+            action = button_payload.get("action") or {}
+            function_name = action.get("function") or action.get("actionMethodName") or ""
+            form_inputs = action.get("parameters") or []
+            # formInputs pode vir separado no buttonClickedPayload
+            raw_form = button_payload.get("formInputs") or {}
+            compat_form = {k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}} for k, v in raw_form.items()}
+            # parametros simples como lista de {key, value}
+            for p in form_inputs:
+                if "key" in p:
+                    compat_form[p["key"]] = {"stringInputs": {"value": [p["value"]]}}
             logger.info("[/chat] CARD_CLICKED user=%s function=%s", advogado, function_name)
             compat_event = {
                 "user": user_info,
                 "common": {
                     "invokedFunction": function_name,
-                    "formInputs": {p["key"]: {"stringInputs": {"value": [p["value"]]}} for p in form_inputs if "key" in p},
+                    "formInputs": compat_form,
                 },
             }
             try:
