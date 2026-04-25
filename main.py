@@ -511,12 +511,17 @@ async def _handle_card_click(event: dict) -> dict:
 
 @app.post("/chat")
 async def chat_event(event: dict):
-    logger.info("[/chat] keys=%s type=%r", list(event.keys()), event.get("type"))
+    logger.info("[/chat] keys=%s type=%r chat_keys=%s", list(event.keys()), event.get("type"), list((event.get("chat") or {}).keys()))
 
     # Evento de autorização do Google Chat (verificação do endpoint)
     if "authorizationEventObject" in event and not event.get("type"):
-        logger.info("[/chat] authorizationEventObject - respondendo {}")
-        return {}
+        chat_data = event.get("chat") or {}
+        logger.info("[/chat] authorizationEventObject chat=%s", str(chat_data)[:500])
+        # Se há dados de mensagem dentro do chat, processar normalmente
+        if chat_data.get("type"):
+            event = {**event, **chat_data}
+        else:
+            return {}
 
     event_type = event.get("type", "")
     logger.info("[/chat] tipo=%s user=%s", event_type, (event.get("user") or event.get("message", {}).get("sender") or {}).get("displayName", "?"))
