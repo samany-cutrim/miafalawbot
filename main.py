@@ -75,6 +75,10 @@ from bot.handlers import (
     marcar_aguardando_correcao,
     processar_busca,
     processar_texto_chat,
+    download_pdf,
+    extrair_texto_pdf,
+    carregar_sessoes,
+    salvar_sessoes,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -83,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v18 iniciado.")
+    logger.info("Mia Falaw Bot v19 iniciado.")
     yield
 
 
@@ -92,7 +96,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v18"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v19"}
 
 
 # ---------------------------------------------------------------------------
@@ -449,17 +453,14 @@ def _decision_dialog_body() -> dict:
                         }
                     },
                     {
-                        "textInput": {
-                            "name": "decisao",
-                            "label": "Texto da decisão *",
-                            "type": "MULTIPLE_LINE",
-                            "hintText": "Cole aqui o texto completo da decisão judicial...",
+                        "textParagraph": {
+                            "text": "📎 <b>Próximo passo:</b> Após confirmar, envie o PDF da decisão diretamente no chat."
                         }
                     },
                     {
                         "buttonList": {
                             "buttons": [
-                                _primary_button("🔍 Analisar decisão", "submit_decision_dialog")
+                                _primary_button("✅ Confirmar e enviar PDF", "submit_decision_dialog")
                             ]
                         }
                     },
@@ -500,6 +501,39 @@ def _form_value(event: dict, key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# SESSÃO — AGUARDANDO PDF
+# ---------------------------------------------------------------------------
+
+async def _marcar_aguardando_pdf(advogado: str, cliente: str, tipo: str):
+    """Marca sessão como aguardando envio do PDF no chat."""
+    sessoes = await carregar_sessoes()
+    chave = advogado.strip().lower().split()[0] if advogado else "advogado"
+    sessoes[chave] = {
+        "_aguardando_pdf": True,
+        "_cliente_hint": cliente,
+        "_tipo_hint": tipo,
+        "_aguardando_correcao": False,
+    }
+    await salvar_sessoes(sessoes)
+
+
+async def _esta_aguardando_pdf(advogado: str) -> bool:
+    """Verifica se advogado está aguardando enviar PDF."""
+    sessoes = await carregar_sessoes()
+    chave = advogado.strip().lower().split()[0] if advogado else "advogado"
+    row = sessoes.get(chave) or {}
+    return bool(row.get("_aguardando_pdf"))
+
+
+async def _get_hints_pdf(advogado: str) -> tuple[str, str]:
+    """Retorna cliente e tipo salvos na sessão."""
+    sessoes = await carregar_sessoes()
+    chave = advogado.strip().lower().split()[0] if advogado else "advogado"
+    row = sessoes.get(chave) or {}
+    return row.get("_cliente_hint") or "", row.get("_tipo_hint") or ""
+
+
+# ---------------------------------------------------------------------------
 # HANDLER — MENSAGEM DE TEXTO
 # ---------------------------------------------------------------------------
 
@@ -508,6 +542,7 @@ async def _handle_message(event: dict) -> dict:
     advogado = _user_name(event)
     texto = _message_text(event)
     texto_lower = texto.lower()
+    msg_obj = event.get("message") or {}
 
     logger.info("[MESSAGE] user=%s texto=%r", advogado, texto_lower[:80])
 
@@ -520,6 +555,50 @@ async def _handle_message(event: dict) -> dict:
         if not ok:
             return _message_text_response(msg)
         return _message_text_and_cards("Análise corrigida:", [_analysis_actions_card(msg)])
+
+    # Aguardando PDF — verifica se há anexo PDF na mensagem
+    if await _esta_aguardando_pdf(advogado):
+        attachments = msg_obj.get("attachment") or []
+        pdf_attachment = next(
+            (a for a in attachments if
+             (a.get("contentType") or "").lower() == "application/pdf" or
+             (a.get("name") or "").lower().endswith(".pdf")),
+            None
+        )
+        if pdf_attachment:
+            pdf_url = (
+                pdf_attachment.get("downloadUri") or
+                pdf_attachment.get("source") or
+                pdf_attachment.get("driveDataRef", {}).get("driveFileId")
+            )
+            if pdf_url and pdf_url.startswith("http"):
+                cliente, tipo = await _get_hints_pdf(advogado)
+                try:
+                    pdf_bytes = await download_pdf(pdf_url)
+                    texto_pdf = extrair_texto_pdf(pdf_bytes)
+                    resultado = await processar_texto_chat(
+                        texto_pdf=texto_pdf,
+                        advogado=advogado,
+                        cliente=cliente,
+                        tipo_responsabilidade=tipo,
+                    )
+                    return _message_text_and_cards("Análise concluída:", [_analysis_actions_card(resultado)])
+                except Exception as exc:
+                    logger.exception("[MESSAGE] erro ao processar PDF: %s", exc)
+                    return _message_text_response("⚠️ Erro ao processar o PDF. Tente novamente.")
+            else:
+                return _message_text_response("⚠️ Não consegui acessar o PDF. Envie o arquivo diretamente no chat (não via Drive).")
+        else:
+            # Sem PDF — lembra o usuário
+            return _message_text_and_cards(
+                "📎 Aguardando o PDF da decisão. Arraste o arquivo .pdf aqui no chat.",
+                [_card_with_buttons(
+                    "Aguardando PDF",
+                    "Anexe o arquivo PDF da decisão diretamente nesta conversa.",
+                    [_primary_button("❌ Cancelar", "cancelar_pdf")],
+                    "aguardando_pdf"
+                )]
+            )
 
     # Busca via texto
     match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto_lower)
@@ -594,27 +673,37 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
     if function_name == "submit_decision_dialog":
         cliente = _form_value(event, "cliente")
         tipo = _form_value(event, "tipo_responsabilidade")
-        decisao = _form_value(event, "decisao")
 
-        if not decisao or not decisao.strip():
-            return _dialog_action_response({
-                "sections": [{
-                    "header": "⚠️ Informe o texto da decisão",
-                    "widgets": _decision_dialog_body()["sections"][0]["widgets"],
-                }]
-            })
+        # Salva metadados e marca sessão aguardando PDF
+        await _marcar_aguardando_pdf(advogado, cliente, tipo)
 
-        try:
-            resultado = await processar_texto_chat(
-                texto_pdf=decisao,
-                advogado=advogado,
-                cliente=cliente,
-                tipo_responsabilidade=tipo,
-            )
-            return _new_message_cards([_analysis_actions_card(resultado)])
-        except Exception as exc:
-            logger.exception("[CARD_CLICK] erro submit_decision: %s", exc)
-            return _new_message_text("⚠️ Erro ao processar a decisão. Tente novamente.")
+        # Fecha o dialog e pede o PDF
+        return {
+            "hostAppDataAction": {
+                "chatDataAction": {
+                    "createMessageAction": {
+                        "message": {
+                            "text": "✅ Metadados salvos! Agora *envie o PDF* da decisão aqui no chat (arraste o arquivo .pdf para esta conversa).",
+                            "cardsV2": [_card_with_buttons(
+                                "📎 Envie o PDF da decisão",
+                                "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\nArraste o arquivo .pdf diretamente aqui no chat.",
+                                [_primary_button("❌ Cancelar", "cancelar_pdf")],
+                                "aguardando_pdf"
+                            )]
+                        }
+                    }
+                }
+            }
+        }
+
+    if function_name == "cancelar_pdf":
+        # Cancela o estado aguardando PDF
+        sessoes = await carregar_sessoes()
+        chave = advogado.strip().lower().split()[0] if advogado else "advogado"
+        if chave in sessoes:
+            del sessoes[chave]
+            await salvar_sessoes(sessoes)
+        return _update_message_cards([_home_card()])
 
     if function_name == "confirm_decision":
         mensagem, oferecer_email = await confirmar_sessao_data(advogado)
@@ -799,7 +888,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v18"}
+    return {"status": "ok", "version": "mia-falaw-bot-v19"}
 
 
 @app.get("/debug-models")
