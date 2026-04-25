@@ -1,5 +1,6 @@
 """
 Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
+v4 — corrigido estrutura de resposta + modal + menus interativos completos
 """
 
 import json
@@ -7,7 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from bot.config import GITHUB_TOKEN
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot iniciado.")
+    logger.info("Mia Falaw Bot v4 iniciado.")
     yield
 
 
@@ -38,70 +39,38 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v4"}
 
 
 # ---------------------------------------------------------------------------
-# ENDPOINT /chat — Google Chat App
+# HELPERS DE RESPOSTA
 # ---------------------------------------------------------------------------
 
 def _as_html(text: str) -> str:
     if not text:
         return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-
-
-def _user_name(event: dict) -> str:
-    user = event.get("user") or {}
-    return user.get("displayName") or "Advogado"
-
-
-def _message_text(event: dict) -> str:
-    msg = event.get("message") or {}
-    text = msg.get("argumentText") or msg.get("text") or ""
-    return text.strip()
-
-
-def _action_function(event: dict) -> str:
-    action = (event.get("action") or {})
-    invoked = action.get("actionMethodName")
-    if invoked:
-        return invoked
-    common = event.get("common") or {}
-    invoked = common.get("invokedFunction")
-    return invoked or ""
-
-
-def _form_value(event: dict, key: str) -> str:
-    form_inputs = (event.get("common") or {}).get("formInputs") or {}
-    data = form_inputs.get(key) or {}
-    str_inputs = data.get("stringInputs") or {}
-    values = str_inputs.get("value") or []
-    if values:
-        return str(values[0]).strip()
-    return ""
+    return (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
 
 
 def _base_header(subtitle: str) -> dict:
-    return {
-        "title": "Mia Falaw Bot",
-        "subtitle": subtitle,
-    }
+    return {"title": "Mia Falaw Bot", "subtitle": subtitle}
 
 
-def _primary_button(label: str, function_name: str) -> dict:
-    return {
-        "text": label,
-        "onClick": {
-            "action": {
-                "function": function_name,
-            }
-        },
-    }
+def _primary_button(label: str, function_name: str, parameters: list | None = None) -> dict:
+    action: dict = {"function": function_name}
+    if parameters:
+        action["parameters"] = parameters
+    return {"text": label, "onClick": {"action": action}}
 
 
 def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: str) -> dict:
-    widgets = [{"textParagraph": {"text": _as_html(text)}}]
+    widgets: list[dict] = [{"textParagraph": {"text": _as_html(text)}}]
     if buttons:
         widgets.append({"buttonList": {"buttons": buttons}})
     return {
@@ -113,6 +82,44 @@ def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: s
     }
 
 
+# Respostas para evento MESSAGE (sem actionResponse)
+def _message_cards_response(cards: list[dict]) -> dict:
+    return {"cardsV2": cards}
+
+
+def _message_text_response(text: str) -> dict:
+    return {"text": text}
+
+
+# Respostas para CARD_CLICKED
+def _update_message_cards(cards: list[dict]) -> dict:
+    return {"actionResponse": {"type": "UPDATE_MESSAGE"}, "cardsV2": cards}
+
+
+def _new_message_cards(cards: list[dict]) -> dict:
+    return {"actionResponse": {"type": "NEW_MESSAGE"}, "cardsV2": cards}
+
+
+def _new_message_text(text: str) -> dict:
+    return {"actionResponse": {"type": "NEW_MESSAGE"}, "text": text}
+
+
+def _dialog_action_response(dialog_body: dict) -> dict:
+    return {
+        "actionResponse": {
+            "type": "DIALOG",
+            "dialogAction": {
+                "actionStatus": {"statusCode": "OK"},
+                "dialog": {"body": dialog_body},
+            },
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# CARDS DE UI
+# ---------------------------------------------------------------------------
+
 def _home_card() -> dict:
     return {
         "cardId": "home",
@@ -121,11 +128,7 @@ def _home_card() -> dict:
             "sections": [
                 {
                     "widgets": [
-                        {
-                            "textParagraph": {
-                                "text": "Selecione uma opção abaixo:"
-                            }
-                        },
+                        {"textParagraph": {"text": "Selecione uma opção abaixo:"}},
                         {
                             "buttonList": {
                                 "buttons": [
@@ -153,16 +156,17 @@ def _busca_card() -> dict:
                         {
                             "textInput": {
                                 "name": "tema_busca",
-                                "label": "Empresa ou tema",
+                                "label": "Empresa ou tema jurídico",
                                 "type": "SINGLE_LINE",
-                                "hintText": "Ex: Magazine Luiza, terceirizacao, acidente de trabalho",
+                                "hintText": "Ex: iFood, horas extras, vínculo empregatício",
                             }
                         },
                         {
                             "buttonList": {
                                 "buttons": [
-                                    _primary_button("Favoraveis", "buscar_favoraveis"),
-                                    _primary_button("Desfavoraveis", "buscar_desfavoraveis"),
+                                    _primary_button("Favoráveis", "buscar_favoraveis"),
+                                    _primary_button("Desfavoráveis", "buscar_desfavoraveis"),
+                                    _primary_button("◀ Menu", "open_home"),
                                 ]
                             }
                         },
@@ -180,25 +184,73 @@ def _ajuda_card() -> dict:
             "header": _base_header("Como usar o Mia Falaw Bot"),
             "sections": [
                 {
+                    "header": "📎 Enviar decisão",
                     "widgets": [
                         {
                             "textParagraph": {
                                 "text": (
-                                    "<b>Enviar decisao:</b> Clique no botao, preencha o modal com o texto da decisao e envie para analise.\n\n"
-                                    "<b>Busca de precedentes:</b> Clique no botao, informe a empresa ou tema e escolha Favoraveis ou Desfavoraveis.\n\n"
-                                    "<b>Corrigir analise:</b> Apos uma analise, marque <b>@Mia Falaw Bot</b> e escreva a instrucao de correcao (ex: <i>resultado deve ser Desfavoravel</i>).\n\n"
-                                    "<b>Confirmar / Cancelar:</b> Apos a analise, use os botoes para confirmar e salvar ou cancelar.\n\n"
-                                    "<b>E-mail:</b> Ao confirmar, escolha se deseja gerar sugestao de e-mail para o cliente."
+                                    "Clique em <b>Enviar decisão</b> para abrir o modal. "
+                                    "Cole o texto da decisão, informe o cliente (opcional) "
+                                    "e o tipo de responsabilidade."
                                 )
                             }
-                        },
+                        }
+                    ],
+                },
+                {
+                    "header": "🔍 Buscar precedentes",
+                    "widgets": [
+                        {
+                            "textParagraph": {
+                                "text": (
+                                    "Clique em <b>Busca de precedentes</b>, informe a empresa "
+                                    "ou tema e escolha Favoráveis ou Desfavoráveis."
+                                )
+                            }
+                        }
+                    ],
+                },
+                {
+                    "header": "✏️ Após a análise",
+                    "widgets": [
+                        {
+                            "textParagraph": {
+                                "text": (
+                                    "<b>Confirmar</b> — salva na planilha<br>"
+                                    "<b>Cancelar</b> — descarta a análise<br>"
+                                    "<b>Corrigir</b> — clique e depois mencione @Mia Falaw Bot no chat<br>"
+                                    "Exemplo: <i>corrigir vara para 3ª Vara do Trabalho de SP</i>"
+                                )
+                            }
+                        }
+                    ],
+                },
+                {
+                    "header": "📧 E-mail para o cliente",
+                    "widgets": [
+                        {
+                            "textParagraph": {
+                                "text": (
+                                    "Após confirmar, escolha <b>Sim</b> para gerar "
+                                    "sugestão de e-mail ou <b>Não</b> para dispensar."
+                                )
+                            }
+                        }
+                    ],
+                },
+                {
+                    "widgets": [
                         {
                             "buttonList": {
-                                "buttons": [_primary_button("Voltar ao menu", "open_home")]
+                                "buttons": [
+                                    _primary_button("Enviar decisão", "open_decision_dialog"),
+                                    _primary_button("Busca de precedentes", "open_busca_card"),
+                                    _primary_button("◀ Menu", "open_home"),
+                                ]
                             }
-                        },
+                        }
                     ]
-                }
+                },
             ],
         },
     }
@@ -206,12 +258,12 @@ def _ajuda_card() -> dict:
 
 def _analysis_actions_card(analysis_text: str) -> dict:
     return _card_with_buttons(
-        "Analise concluida",
+        "Análise concluída — aguardando confirmação",
         analysis_text,
         [
-            _primary_button("Confirmar", "confirm_decision"),
-            _primary_button("Cancelar", "cancel_decision"),
-            _primary_button("Corrigir", "request_correction"),
+            _primary_button("✅ Confirmar", "confirm_decision"),
+            _primary_button("❌ Cancelar", "cancel_decision"),
+            _primary_button("✏️ Corrigir", "request_correction"),
         ],
         "analysis_actions",
     )
@@ -219,139 +271,201 @@ def _analysis_actions_card(analysis_text: str) -> dict:
 
 def _email_choice_card() -> dict:
     return _card_with_buttons(
-        "Sugestao de e-mail",
-        "Deseja gerar sugestao de e-mail para o cliente?",
-        [_primary_button("Sim", "email_yes"), _primary_button("Nao", "email_no")],
+        "Deseja gerar e-mail para o cliente?",
+        "A decisão foi salva com sucesso.\nDeseja gerar uma sugestão de e-mail de reporte ao cliente?",
+        [
+            _primary_button("✅ Sim, gerar e-mail", "email_yes"),
+            _primary_button("❌ Não, obrigado", "email_no"),
+        ],
         "email_choice",
     )
 
 
-def _dialog_response() -> dict:
-    tipos = [
-        "OL", "Nuvem", "Terceirizacao", "Subsidiaria",
-        "Ex Funcionario", "Ex-Foodlovers", "Marketplace",
-    ]
-    body = {
+def _correction_waiting_card() -> dict:
+    return _card_with_buttons(
+        "Aguardando instrução de correção",
+        (
+            "Mencione @Mia Falaw Bot no chat e diga o que quer corrigir.\n\n"
+            "Exemplos:\n"
+            "• corrigir a vara para 3ª Vara do Trabalho de SP\n"
+            "• resultado deve ser Desfavorável\n"
+            "• TRT é TRT-2\n"
+            "• cliente é Magazine Luiza"
+        ),
+        [_primary_button("❌ Cancelar análise", "cancel_decision")],
+        "correction_waiting",
+    )
+
+
+# ---------------------------------------------------------------------------
+# DIALOG MODAL — Enviar decisão
+# ---------------------------------------------------------------------------
+
+TIPOS_RESPONSABILIDADE = [
+    "OL", "Nuvem", "Terceirização", "Subsidiária",
+    "Ex Funcionário", "Ex-Foodlovers", "Marketplace",
+]
+
+
+def _decision_dialog_body() -> dict:
+    return {
         "sections": [
             {
-                "header": "Nova decisao",
+                "header": "Nova decisão para análise",
                 "widgets": [
-                    {"textInput": {"name": "cliente", "label": "Cliente (opcional)", "type": "SINGLE_LINE"}},
+                    {
+                        "textInput": {
+                            "name": "cliente",
+                            "label": "Cliente (empresa reclamada) — opcional",
+                            "type": "SINGLE_LINE",
+                            "hintText": "Ex: iFood, Magazine Luiza, Loft...",
+                        }
+                    },
                     {
                         "selectionInput": {
                             "name": "tipo_responsabilidade",
                             "label": "Tipo de Responsabilidade",
                             "type": "DROPDOWN",
-                            "items": [{"text": t, "value": t} for t in tipos],
+                            "items": [
+                                {"text": t, "value": t, "selected": i == 0}
+                                for i, t in enumerate(TIPOS_RESPONSABILIDADE)
+                            ],
                         }
                     },
-                    {"textInput": {"name": "decisao", "label": "Decisao (cole o texto ou link do documento)", "type": "MULTIPLE_LINE"}},
-                    {"buttonList": {"buttons": [_primary_button("Enviar decisao", "submit_decision_dialog")]}},
+                    {
+                        "textInput": {
+                            "name": "decisao",
+                            "label": "Texto da decisão *",
+                            "type": "MULTIPLE_LINE",
+                            "hintText": "Cole aqui o texto completo da decisão judicial...",
+                        }
+                    },
+                    {
+                        "buttonList": {
+                            "buttons": [
+                                _primary_button("🔍 Analisar decisão", "submit_decision_dialog")
+                            ]
+                        }
+                    },
                 ],
             }
         ]
     }
-    return _dialog_action_response(body)
 
 
-def _text_response(text: str) -> dict:
-    return {"text": text}
+def _dialog_response() -> dict:
+    return _dialog_action_response(_decision_dialog_body())
 
 
-def _cards_response(cards: list[dict]) -> dict:
-    return {"cardsV2": cards}
+# ---------------------------------------------------------------------------
+# EXTRAÇÃO DE DADOS DO EVENTO
+# ---------------------------------------------------------------------------
+
+def _user_name(event: dict) -> str:
+    user = event.get("user") or {}
+    return user.get("displayName") or "Advogado"
 
 
-def _update_cards_response(cards: list[dict]) -> dict:
-    """Usado em CARD_CLICKED para atualizar card existente."""
-    return {
-        "actionResponse": {"type": "UPDATE_MESSAGE"},
-        "cardsV2": cards,
-    }
+def _message_text(event: dict) -> str:
+    msg = event.get("message") or {}
+    return (msg.get("argumentText") or msg.get("text") or "").strip()
 
 
-def _update_text_response(text: str) -> dict:
-    """Usado em CARD_CLICKED para responder com texto."""
-    return {
-        "actionResponse": {"type": "NEW_MESSAGE"},
-        "text": text,
-    }
+def _form_value(event: dict, key: str) -> str:
+    form_inputs = (event.get("common") or {}).get("formInputs") or {}
+    data = form_inputs.get(key) or {}
+    values = (data.get("stringInputs") or {}).get("value") or []
+    return str(values[0]).strip() if values else ""
 
 
-def _dialog_action_response(dialog_body: dict) -> dict:
-    """Abre um dialog em resposta a CARD_CLICKED."""
-    return {
-        "actionResponse": {
-            "type": "DIALOG",
-            "dialogAction": {
-                "actionStatus": {"statusCode": "OK"},
-                "dialog": {"body": dialog_body},
-            },
-        }
-    }
-
+# ---------------------------------------------------------------------------
+# HANDLER — MENSAGEM DE TEXTO
+# ---------------------------------------------------------------------------
 
 async def _handle_message(event: dict) -> dict:
-    advogado = _user_name(event)
-    texto = _message_text(event).lower()
-
-    if await esta_aguardando_correcao(advogado):
-        if not texto:
-            return _text_response("Informe no chat a instrucao de correcao.")
-        ok, msg = await corrigir_sessao_data(advogado, texto)
-        if not ok:
-            return _text_response(msg)
-        return _cards_response([_analysis_actions_card(msg)])
-
     import re
-    match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto)
-    match_des = re.search(r'desfavor[aá]veis?\s+(.+)', texto)
+    advogado = _user_name(event)
+    texto = _message_text(event)
+    texto_lower = texto.lower()
+
+    logger.info("[MESSAGE] user=%s texto=%r", advogado, texto_lower[:80])
+
+    # Aguardando correção — qualquer mensagem é instrução de correção
+    if await esta_aguardando_correcao(advogado):
+        instrucao = re.sub(r'@[\w\s\-]+', '', texto_lower, flags=re.IGNORECASE).strip()
+        if not instrucao:
+            return _message_cards_response([_correction_waiting_card()])
+        ok, msg = await corrigir_sessao_data(advogado, instrucao)
+        if not ok:
+            return _message_text_response(msg)
+        return _message_cards_response([_analysis_actions_card(msg)])
+
+    # Busca via texto
+    match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto_lower)
+    match_des = re.search(r'desfavor[aá]veis?\s+(.+)', texto_lower)
     if match_fav or match_des:
-        tipo = "favoravel" if match_fav else "desfavoravel"
+        tipo = "favoraveis" if match_fav else "desfavoraveis"
         tema = (match_fav or match_des).group(1).strip()
         try:
             resultado = await processar_busca(tipo, tema)
-            return _cards_response([_card_with_buttons(f"Precedentes {tipo}", resultado, [], "busca_resultado")])
-        except Exception as exc:
-            logger.exception("[/chat] erro busca mencao: %s", exc)
-            return _text_response("Erro ao buscar precedentes.")
-
-    return _cards_response([_home_card()])
-
-
-async def _handle_card_click(event: dict) -> dict:
-    advogado = _user_name(event)
-    function_name = _action_function(event)
-    return await _handle_card_click_new(advogado, function_name, event)
-
-
-async def _handle_card_click_new(advogado: str, function_name: str, event: dict) -> dict:
-    if function_name == "open_home":
-        return _update_cards_response([_home_card()])
-
-    if function_name == "open_ajuda":
-        return _update_cards_response([_ajuda_card()])
-
-    if function_name == "open_busca_card":
-        return _update_cards_response([_busca_card()])
-
-    if function_name in ("buscar_favoraveis", "buscar_desfavoraveis"):
-        tema = _form_value(event, "tema_busca")
-        if not tema:
-            return _update_text_response("Informe a empresa ou tema no campo de busca.")
-        tipo = "favoravel" if function_name == "buscar_favoraveis" else "desfavoravel"
-        try:
-            resultado = await processar_busca(tipo, tema)
-            return _update_cards_response([
+            label = "Favoráveis" if tipo == "favoraveis" else "Desfavoráveis"
+            return _message_cards_response([
                 _card_with_buttons(
-                    f"Precedentes {tipo}", resultado,
-                    [_primary_button("Nova busca", "open_busca_card"), _primary_button("Menu", "open_home")],
+                    f"Precedentes {label} — {tema}",
+                    resultado,
+                    [
+                        _primary_button("🔍 Nova busca", "open_busca_card"),
+                        _primary_button("◀ Menu", "open_home"),
+                    ],
                     "busca_resultado",
                 )
             ])
         except Exception as exc:
-            logger.exception("[/chat] erro busca: %s", exc)
-            return _update_text_response("Erro ao buscar precedentes.")
+            logger.exception("[MESSAGE] erro busca: %s", exc)
+            return _message_text_response("Erro ao buscar precedentes.")
+
+    # Qualquer outra mensagem → home card
+    return _message_cards_response([_home_card()])
+
+
+# ---------------------------------------------------------------------------
+# HANDLER — CARD CLICKED
+# ---------------------------------------------------------------------------
+
+async def _handle_card_click(advogado: str, function_name: str, event: dict) -> dict:
+    logger.info("[CARD_CLICK] user=%s function=%s", advogado, function_name)
+
+    if function_name == "open_home":
+        return _update_message_cards([_home_card()])
+
+    if function_name == "open_ajuda":
+        return _update_message_cards([_ajuda_card()])
+
+    if function_name == "open_busca_card":
+        return _update_message_cards([_busca_card()])
+
+    if function_name in ("buscar_favoraveis", "buscar_desfavoraveis"):
+        tema = _form_value(event, "tema_busca")
+        if not tema:
+            return _update_message_cards([_busca_card()])
+        tipo = "favoraveis" if function_name == "buscar_favoraveis" else "desfavoraveis"
+        label = "Favoráveis" if tipo == "favoraveis" else "Desfavoráveis"
+        try:
+            resultado = await processar_busca(tipo, tema)
+            return _update_message_cards([
+                _card_with_buttons(
+                    f"Precedentes {label} — {tema}",
+                    resultado,
+                    [
+                        _primary_button("🔍 Nova busca", "open_busca_card"),
+                        _primary_button("◀ Menu", "open_home"),
+                    ],
+                    "busca_resultado",
+                )
+            ])
+        except Exception as exc:
+            logger.exception("[CARD_CLICK] erro busca: %s", exc)
+            return _new_message_text("Erro ao buscar precedentes.")
 
     if function_name == "open_decision_dialog":
         return _dialog_response()
@@ -360,126 +474,213 @@ async def _handle_card_click_new(advogado: str, function_name: str, event: dict)
         cliente = _form_value(event, "cliente")
         tipo = _form_value(event, "tipo_responsabilidade")
         decisao = _form_value(event, "decisao")
-        if not decisao:
-            return _update_text_response("Informe o conteudo da decisao no campo do modal.")
-        resultado = await processar_texto_chat(
-            texto_pdf=decisao,
-            advogado=advogado,
-            cliente=cliente,
-            tipo_responsabilidade=tipo,
-        )
-        return _update_cards_response([_analysis_actions_card(resultado)])
+
+        if not decisao or not decisao.strip():
+            return _dialog_action_response({
+                "sections": [{
+                    "header": "⚠️ Informe o texto da decisão",
+                    "widgets": _decision_dialog_body()["sections"][0]["widgets"],
+                }]
+            })
+
+        try:
+            resultado = await processar_texto_chat(
+                texto_pdf=decisao,
+                advogado=advogado,
+                cliente=cliente,
+                tipo_responsabilidade=tipo,
+            )
+            # Após fechar o dialog, envia nova mensagem com análise
+            return {
+                "actionResponse": {"type": "NEW_MESSAGE"},
+                "cardsV2": [_analysis_actions_card(resultado)],
+            }
+        except Exception as exc:
+            logger.exception("[CARD_CLICK] erro submit_decision: %s", exc)
+            return _new_message_text("⚠️ Erro ao processar a decisão. Tente novamente.")
 
     if function_name == "confirm_decision":
         mensagem, oferecer_email = await confirmar_sessao_data(advogado)
-        cards = [_card_with_buttons("Confirmacao", mensagem, [], "confirmation")]
         if oferecer_email:
-            cards.append(_email_choice_card())
-        return _update_cards_response(cards)
+            return _update_message_cards([
+                _card_with_buttons("✅ Decisão registrada!", mensagem, [], "confirmation"),
+                _email_choice_card(),
+            ])
+        return _update_message_cards([
+            _card_with_buttons(
+                "✅ Decisão registrada!",
+                mensagem,
+                [_primary_button("◀ Menu", "open_home")],
+                "confirmation",
+            )
+        ])
 
     if function_name == "cancel_decision":
-        return _update_text_response(await cancelar_sessao_data(advogado))
+        msg = await cancelar_sessao_data(advogado)
+        return _update_message_cards([
+            _card_with_buttons(
+                "❌ Análise cancelada",
+                msg,
+                [_primary_button("◀ Menu", "open_home")],
+                "cancelled",
+            )
+        ])
 
     if function_name == "request_correction":
-        return _update_text_response(await marcar_aguardando_correcao(advogado))
+        await marcar_aguardando_correcao(advogado)
+        return _update_message_cards([_correction_waiting_card()])
 
     if function_name == "email_yes":
-        return _update_text_response(await gerar_email_sessao_data(advogado))
+        email_text = await gerar_email_sessao_data(advogado)
+        return _new_message_cards([
+            _card_with_buttons(
+                "📧 Sugestão de e-mail",
+                email_text,
+                [_primary_button("◀ Menu", "open_home")],
+                "email_result",
+            )
+        ])
 
     if function_name == "email_no":
-        return _update_text_response(await dispensar_email_sessao_data(advogado))
+        msg = await dispensar_email_sessao_data(advogado)
+        return _update_message_cards([
+            _card_with_buttons(
+                "👍 Pronto!",
+                msg,
+                [_primary_button("◀ Menu", "open_home")],
+                "email_dismissed",
+            )
+        ])
 
-    return _update_text_response("Acao nao reconhecida.")
+    logger.warning("[CARD_CLICK] function não reconhecida: %s", function_name)
+    return _update_message_cards([_home_card()])
 
+
+# ---------------------------------------------------------------------------
+# ENDPOINT PRINCIPAL /chat
+# ---------------------------------------------------------------------------
 
 @app.post("/chat")
-async def chat_event(event: dict):
-    logger.info("[/chat] RAW: %s", json.dumps(event, ensure_ascii=False)[:3000])
+async def chat_event(request: Request):
+    """
+    Recebe todos os eventos do Google Chat App.
+
+    Tipos de evento:
+      - MESSAGE          → chat.messagePayload.message
+      - CARD_CLICKED     → commonEventObject.invokedFunction
+      - APP_ADDED        → chat.addedToSpacePayload
+    """
+    try:
+        event = await request.json()
+    except Exception:
+        return JSONResponse({"text": "Erro ao processar requisição."})
+
+    logger.info("[/chat] RAW: %s", json.dumps(event, ensure_ascii=False)[:2000])
 
     chat_data = event.get("chat") or {}
-    common = event.get("commonEventObject") or {}
-    message_payload = chat_data.get("messagePayload") or {}
+    common    = event.get("commonEventObject") or {}
+    user_info = chat_data.get("user") or {}
+    advogado  = user_info.get("displayName") or "Advogado"
 
-    # CARD_CLICKED: function em commonEventObject.invokedFunction
+    # ------------------------------------------------------------------
+    # 1. CARD_CLICKED — commonEventObject.invokedFunction presente
+    # ------------------------------------------------------------------
     invoked_function = common.get("invokedFunction") or ""
     if invoked_function:
-        user_info = chat_data.get("user") or {}
-        advogado = user_info.get("displayName") or "Advogado"
-        # formInputs fica em commonEventObject.formInputs
         raw_form = common.get("formInputs") or {}
         compat_form = {
             k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
             for k, v in raw_form.items()
         }
-        compat_event = {"user": user_info, "common": {"invokedFunction": invoked_function, "formInputs": compat_form}}
-        logger.info("[/chat] CARD_CLICKED user=%s function=%s form_keys=%s", advogado, invoked_function, list(compat_form.keys()))
+        compat_event = {
+            "user": user_info,
+            "common": {"invokedFunction": invoked_function, "formInputs": compat_form},
+        }
+        logger.info("[/chat] CARD_CLICKED user=%s fn=%s form=%s",
+                    advogado, invoked_function, list(compat_form.keys()))
         try:
-            return await _handle_card_click_new(advogado, invoked_function, compat_event)
+            result = await _handle_card_click(advogado, invoked_function, compat_event)
+            return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
-            return _update_text_response("Ocorreu um erro. Tente novamente.")
+            return JSONResponse(_new_message_text("Ocorreu um erro. Tente novamente."))
 
-    logger.info("[/chat] keys=%s payload_keys=%s chat_keys=%s", list(event.keys()), list(message_payload.keys()), list(chat_data.keys()))
-
-    user_info = chat_data.get("user") or {}
-    advogado = user_info.get("displayName") or "Advogado"
-
-    # CARD_CLICKED: buttonClickedPayload pode estar em chat_data ou em messagePayload
-    button_payload = chat_data.get("buttonClickedPayload") or message_payload.get("buttonClickedPayload") or {}
+    # ------------------------------------------------------------------
+    # 2. CARD_CLICKED alternativo — buttonClickedPayload
+    # ------------------------------------------------------------------
+    message_payload = chat_data.get("messagePayload") or {}
+    button_payload  = (
+        chat_data.get("buttonClickedPayload")
+        or message_payload.get("buttonClickedPayload")
+        or {}
+    )
     if button_payload:
-        logger.info("[/chat] CARD_CLICKED payload: %s", str(button_payload)[:1000])
-        action = button_payload.get("action") or {}
+        action        = button_payload.get("action") or {}
         function_name = action.get("function") or action.get("actionMethodName") or ""
-        params = action.get("parameters") or []
-        raw_form = button_payload.get("formInputs") or {}
-        compat_form = {
+        params        = action.get("parameters") or []
+        raw_form      = button_payload.get("formInputs") or {}
+        compat_form   = {
             k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
             for k, v in raw_form.items()
         }
         for p in params:
             if "key" in p:
-                compat_form[p["key"]] = {"stringInputs": {"value": [p["value"]]}}
-        logger.info("[/chat] CARD_CLICKED user=%s function=%s form=%s", advogado, function_name, list(compat_form.keys()))
-        compat_event = {"user": user_info, "common": {"invokedFunction": function_name, "formInputs": compat_form}}
+                compat_form[p["key"]] = {"stringInputs": {"value": [p.get("value", "")]}}
+        compat_event = {
+            "user": user_info,
+            "common": {"invokedFunction": function_name, "formInputs": compat_form},
+        }
+        logger.info("[/chat] CARD_CLICKED(button) user=%s fn=%s", advogado, function_name)
         try:
-            return await _handle_card_click_new(advogado, function_name, compat_event)
+            result = await _handle_card_click(advogado, function_name, compat_event)
+            return JSONResponse(result)
         except Exception as exc:
-            logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
-            return _text_response("Ocorreu um erro. Tente novamente.")
+            logger.exception("[/chat] erro CARD_CLICKED(button): %s", exc)
+            return JSONResponse(_new_message_text("Ocorreu um erro."))
 
-    # MESSAGE: em messagePayload ou chat_data direto
+    # ------------------------------------------------------------------
+    # 3. MESSAGE — mensagem de texto
+    # ------------------------------------------------------------------
     message = message_payload.get("message") or chat_data.get("message") or {}
     if message:
         texto = (message.get("argumentText") or message.get("text") or "").strip()
         logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
         try:
-            return await _handle_message({"user": user_info, "message": message})
+            result = await _handle_message({"user": user_info, "message": message})
+            return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return _cards_response([_home_card()])
+            return JSONResponse(_message_cards_response([_home_card()]))
 
-    logger.warning("[/chat] evento nao tratado chat_keys=%s full_chat=%s", list(chat_data.keys()), str(chat_data)[:500])
-    return _cards_response([_home_card()])
+    # ------------------------------------------------------------------
+    # 4. APP_ADDED
+    # ------------------------------------------------------------------
+    if chat_data.get("addedToSpacePayload") or event.get("type") == "ADDED_TO_SPACE":
+        logger.info("[/chat] APP_ADDED user=%s", advogado)
+        return JSONResponse(_message_cards_response([_home_card()]))
 
-    # Evento de autorizacao / verificacao do endpoint — retorna vazio
-    if "authorizationEventObject" in event:
-        return {}
+    # ------------------------------------------------------------------
+    # 5. Evento não identificado → home card
+    # ------------------------------------------------------------------
+    logger.warning("[/chat] evento não tratado keys=%s chat_keys=%s",
+                   list(event.keys()), list(chat_data.keys()))
+    return JSONResponse(_message_cards_response([_home_card()]))
 
-    logger.warning("[/chat] evento nao reconhecido: %s", str(event)[:500])
-    return _text_response("Evento nao suportado.")
 
+# ---------------------------------------------------------------------------
+# ENDPOINTS AUXILIARES
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v3-chatapp"}
+    return {"status": "ok", "version": "mia-falaw-bot-v4"}
 
 
 @app.get("/debug-models")
 async def debug_models():
     if not GITHUB_TOKEN:
-        return {"error": "GITHUB_TOKEN nao configurado"}
+        return {"error": "GITHUB_TOKEN não configurado"}
     try:
-        # Usa httpx direto para evitar erro de parsing Pydantic do SDK openai
         async with httpx.AsyncClient(timeout=15) as cli:
             r = await cli.get(
                 "https://models.inference.ai.azure.com/models",
@@ -494,8 +695,7 @@ async def debug_models():
                 items = data.get("data") or data.get("models") or data.get("value") or []
                 ids = sorted(m.get("id", "") or m.get("name", "") for m in items if isinstance(m, dict))
             else:
-                return {"error": "formato inesperado", "raw": str(data)[:500]}
-            ids = [i for i in ids if i]
-            return {"total": len(ids), "models": ids}
+                return {"error": "formato inesperado"}
+            return {"total": len(ids := [i for i in ids if i]), "models": ids}
     except Exception as e:
         return {"error": str(e)}
