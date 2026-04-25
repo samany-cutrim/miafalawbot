@@ -82,13 +82,18 @@ def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: s
     }
 
 
-# Respostas para evento MESSAGE (sem actionResponse)
+# Respostas para evento MESSAGE
 def _message_cards_response(cards: list[dict]) -> dict:
     return {"cardsV2": cards}
 
 
 def _message_text_response(text: str) -> dict:
     return {"text": text}
+
+
+def _message_text_and_cards(text: str, cards: list[dict]) -> dict:
+    """Texto + cards — fallback que garante exibição no Google Chat."""
+    return {"text": text, "cardsV2": cards}
 
 
 # Respostas para CARD_CLICKED
@@ -394,11 +399,11 @@ async def _handle_message(event: dict) -> dict:
     if await esta_aguardando_correcao(advogado):
         instrucao = re.sub(r'@[\w\s\-]+', '', texto_lower, flags=re.IGNORECASE).strip()
         if not instrucao:
-            return _message_cards_response([_correction_waiting_card()])
+            return _message_text_and_cards("Informe a instrução de correção:", [_correction_waiting_card()])
         ok, msg = await corrigir_sessao_data(advogado, instrucao)
         if not ok:
             return _message_text_response(msg)
-        return _message_cards_response([_analysis_actions_card(msg)])
+        return _message_text_and_cards("Análise corrigida:", [_analysis_actions_card(msg)])
 
     # Busca via texto
     match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto_lower)
@@ -409,7 +414,7 @@ async def _handle_message(event: dict) -> dict:
         try:
             resultado = await processar_busca(tipo, tema)
             label = "Favoráveis" if tipo == "favoraveis" else "Desfavoráveis"
-            return _message_cards_response([
+            return _message_text_and_cards(f"Precedentes {label}:", [
                 _card_with_buttons(
                     f"Precedentes {label} — {tema}",
                     resultado,
@@ -425,7 +430,7 @@ async def _handle_message(event: dict) -> dict:
             return _message_text_response("Erro ao buscar precedentes.")
 
     # Qualquer outra mensagem → home card
-    return _message_cards_response([_home_card()])
+    return _message_text_and_cards("Olá! Selecione uma opção:", [_home_card()])
 
 
 # ---------------------------------------------------------------------------
@@ -647,24 +652,25 @@ async def chat_event(request: Request):
         logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
         try:
             result = await _handle_message({"user": user_info, "message": message})
+            logger.info("[/chat] MESSAGE response: %s", json.dumps(result, ensure_ascii=False)[:500])
             return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return JSONResponse(_message_cards_response([_home_card()]))
+            return JSONResponse(_message_text_and_cards("Erro interno.", [_home_card()]))
 
     # ------------------------------------------------------------------
     # 4. APP_ADDED
     # ------------------------------------------------------------------
     if chat_data.get("addedToSpacePayload") or event.get("type") == "ADDED_TO_SPACE":
         logger.info("[/chat] APP_ADDED user=%s", advogado)
-        return JSONResponse(_message_cards_response([_home_card()]))
+        return JSONResponse(_message_text_and_cards("Menu principal:", [_home_card()]))
 
     # ------------------------------------------------------------------
     # 5. Evento não identificado → home card
     # ------------------------------------------------------------------
     logger.warning("[/chat] evento não tratado keys=%s chat_keys=%s",
                    list(event.keys()), list(chat_data.keys()))
-    return JSONResponse(_message_cards_response([_home_card()]))
+    return JSONResponse(_message_text_and_cards("Menu principal:", [_home_card()]))
 
 
 # ---------------------------------------------------------------------------
