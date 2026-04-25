@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v20 iniciado.")
+    logger.info("Mia Falaw Bot v21 iniciado.")
     yield
 
 
@@ -96,7 +96,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v20"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v21"}
 
 
 # ---------------------------------------------------------------------------
@@ -566,38 +566,74 @@ async def _handle_message(event: dict) -> dict:
             None
         )
         if pdf_attachment:
-            pdf_url = (
-                pdf_attachment.get("downloadUri") or
-                pdf_attachment.get("source") or
-                pdf_attachment.get("driveDataRef", {}).get("driveFileId")
-            )
-            if pdf_url and pdf_url.startswith("http"):
-                cliente, tipo = await _get_hints_pdf(advogado)
-                # Pega o token OAuth do usuário para download autenticado
-                auth_event = event.get("authorizationEventObject") or {}
-                user_token = auth_event.get("userOAuthToken") or ""
-                try:
+            cliente, tipo = await _get_hints_pdf(advogado)
+            logger.info("[PDF] attachment keys: %s", list(pdf_attachment.keys()))
+            logger.info("[PDF] attachment data: %s", json.dumps(pdf_attachment, ensure_ascii=False)[:500])
+
+            # Tenta o attachmentDataRef (Drive) primeiro
+            drive_ref = pdf_attachment.get("driveDataRef") or {}
+            drive_file_id = drive_ref.get("driveFileId") or ""
+
+            # Ou tenta baixar via Chat API usando service account
+            attachment_name = pdf_attachment.get("name") or ""  # ex: spaces/.../messages/.../attachments/...
+
+            try:
+                pdf_bytes = None
+
+                if drive_file_id:
+                    # PDF está no Drive — baixa via Drive API com service account
+                    from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
+                    from google.oauth2 import service_account
                     import httpx as _httpx
-                    headers = {}
-                    if user_token:
-                        headers["Authorization"] = f"Bearer {user_token}"
-                    async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as client_http:
-                        resp = await client_http.get(pdf_url, headers=headers)
-                        resp.raise_for_status()
-                        pdf_bytes = resp.content
-                    texto_pdf = extrair_texto_pdf(pdf_bytes)
-                    resultado = await processar_texto_chat(
-                        texto_pdf=texto_pdf,
-                        advogado=advogado,
-                        cliente=cliente,
-                        tipo_responsabilidade=tipo,
+                    creds = service_account.Credentials.from_service_account_file(
+                        GOOGLE_SERVICE_ACCOUNT_FILE,
+                        scopes=["https://www.googleapis.com/auth/drive.readonly"]
                     )
-                    return _message_text_and_cards("Análise concluída:", [_analysis_actions_card(resultado)])
-                except Exception as exc:
-                    logger.exception("[MESSAGE] erro ao processar PDF: %s", exc)
-                    return _message_text_response("⚠️ Erro ao processar o PDF. Tente novamente.")
-            else:
-                return _message_text_response("⚠️ Não consegui acessar o PDF. Envie o arquivo diretamente no chat (não via Drive).")
+                    creds.refresh(google.auth.transport.requests.Request())
+                    drive_url = f"https://www.googleapis.com/drive/v3/files/{drive_file_id}?alt=media"
+                    async with _httpx.AsyncClient(timeout=60) as c:
+                        r = await c.get(drive_url, headers={"Authorization": f"Bearer {creds.token}"})
+                        r.raise_for_status()
+                        pdf_bytes = r.content
+
+                elif attachment_name:
+                    # PDF está no Chat — usa Chat API com service account
+                    from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
+                    from google.oauth2 import service_account
+                    import google.auth.transport.requests
+                    import httpx as _httpx
+                    creds = service_account.Credentials.from_service_account_file(
+                        GOOGLE_SERVICE_ACCOUNT_FILE,
+                        scopes=["https://www.googleapis.com/auth/chat.bot"]
+                    )
+                    req = google.auth.transport.requests.Request()
+                    creds.refresh(req)
+                    # Primeiro pega os metadados do attachment para obter o downloadUri real
+                    meta_url = f"https://chat.googleapis.com/v1/{attachment_name}"
+                    async with _httpx.AsyncClient(timeout=60) as c:
+                        meta_r = await c.get(meta_url, headers={"Authorization": f"Bearer {creds.token}"})
+                        if meta_r.status_code == 200:
+                            meta = meta_r.json()
+                            download_url = meta.get("downloadUri") or ""
+                            if download_url:
+                                dl_r = await c.get(download_url, headers={"Authorization": f"Bearer {creds.token}"})
+                                dl_r.raise_for_status()
+                                pdf_bytes = dl_r.content
+
+                if not pdf_bytes:
+                    return _message_text_response("⚠️ Não consegui acessar o PDF. Tente enviar o arquivo novamente.")
+
+                texto_pdf = extrair_texto_pdf(pdf_bytes)
+                resultado = await processar_texto_chat(
+                    texto_pdf=texto_pdf,
+                    advogado=advogado,
+                    cliente=cliente,
+                    tipo_responsabilidade=tipo,
+                )
+                return _message_text_and_cards("Análise concluída:", [_analysis_actions_card(resultado)])
+            except Exception as exc:
+                logger.exception("[MESSAGE] erro ao processar PDF: %s", exc)
+                return _message_text_response("⚠️ Erro ao processar o PDF. Tente novamente.")
         else:
             # Sem PDF — lembra o usuário
             return _message_text_and_cards(
@@ -898,7 +934,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v20"}
+    return {"status": "ok", "version": "mia-falaw-bot-v21"}
 
 
 @app.get("/debug-models")
