@@ -341,19 +341,19 @@ def _home_card() -> dict:
     return {
         "cardId": "home",
         "card": {
-            "header": _base_header("Analise de decisoes trabalhistas"),
+            "header": _base_header("Análise de decisões trabalhistas"),
             "sections": [
                 {
                     "widgets": [
                         {
                             "textParagraph": {
-                                "text": "Selecione uma opcao abaixo:"
+                                "text": "Selecione uma opção abaixo:"
                             }
                         },
                         {
                             "buttonList": {
                                 "buttons": [
-                                    _primary_button("Enviar decisao", "open_decision_dialog"),
+                                    _primary_button("Enviar decisão", "open_decision_dialog"),
                                     _primary_button("Busca de precedentes", "open_busca_card"),
                                     _primary_button("Ajuda", "open_ajuda"),
                                 ]
@@ -700,7 +700,8 @@ async def chat_event(event: dict):
                 logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
                 return _new_format_text("Ocorreu um erro. Tente novamente.")
 
-        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:2000])\n        return _new_format_cards([_home_card()])
+        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:2000])
+        return _new_format_cards([_home_card()])
 
     # Evento de autorização sem payload (verificação inicial)
     if "authorizationEventObject" in event:
