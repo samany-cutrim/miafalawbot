@@ -1,6 +1,6 @@
 """
 Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
-v7 — renderActions/hostAppDataActionMarkup para Add-on Chat
+v7 — renderActions/hostAppDataAction para Add-on Chat
 """
 
 import json
@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v7 iniciado.")
+    logger.info("Mia Falaw Bot v8 iniciado.")
     yield
 
 
@@ -89,7 +89,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v7"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v8"}
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +136,8 @@ def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: s
 def _message_cards_response(cards: list[dict]) -> dict:
     # Add-on format: renderActions com hostAppAction
     return {
-        "hostAppDataActionMarkup": {
-            "chatDataActionMarkup": {
+        "hostAppDataAction": {
+            "chatDataAction": {
                 "createMessageAction": {
                     "message": {
                         "cardsV2": cards,
@@ -150,8 +150,8 @@ def _message_cards_response(cards: list[dict]) -> dict:
 
 def _message_text_response(text: str) -> dict:
     return {
-        "hostAppDataActionMarkup": {
-            "chatDataActionMarkup": {
+        "hostAppDataAction": {
+            "chatDataAction": {
                 "createMessageAction": {
                     "message": {
                         "text": text,
@@ -164,8 +164,8 @@ def _message_text_response(text: str) -> dict:
 
 def _message_text_and_cards(text: str, cards: list[dict]) -> dict:
     return {
-        "hostAppDataActionMarkup": {
-            "chatDataActionMarkup": {
+        "hostAppDataAction": {
+            "chatDataAction": {
                 "createMessageAction": {
                     "message": {
                         "text": text,
@@ -760,7 +760,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v7"}
+    return {"status": "ok", "version": "mia-falaw-bot-v8"}
 
 
 @app.get("/debug-models")
