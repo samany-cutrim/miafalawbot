@@ -1,6 +1,6 @@
 """
 Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
-v6 — actionResponse NEW_MESSAGE em todas as respostas de MESSAGE
+v7 — renderActions/hostAppDataActionMarkup para Add-on Chat
 """
 
 import json
@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v6 iniciado.")
+    logger.info("Mia Falaw Bot v7 iniciado.")
     yield
 
 
@@ -89,7 +89,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v6"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v7"}
 
 
 # ---------------------------------------------------------------------------
@@ -134,24 +134,46 @@ def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: s
 
 # Respostas para evento MESSAGE — SEMPRE com actionResponse NEW_MESSAGE
 def _message_cards_response(cards: list[dict]) -> dict:
+    # Add-on format: renderActions com hostAppAction
     return {
-        "actionResponse": {"type": "NEW_MESSAGE"},
-        "cardsV2": cards,
+        "hostAppDataActionMarkup": {
+            "chatDataActionMarkup": {
+                "createMessageAction": {
+                    "message": {
+                        "cardsV2": cards,
+                    }
+                }
+            }
+        }
     }
 
 
 def _message_text_response(text: str) -> dict:
     return {
-        "actionResponse": {"type": "NEW_MESSAGE"},
-        "text": text,
+        "hostAppDataActionMarkup": {
+            "chatDataActionMarkup": {
+                "createMessageAction": {
+                    "message": {
+                        "text": text,
+                    }
+                }
+            }
+        }
     }
 
 
 def _message_text_and_cards(text: str, cards: list[dict]) -> dict:
     return {
-        "actionResponse": {"type": "NEW_MESSAGE"},
-        "text": text,
-        "cardsV2": cards,
+        "hostAppDataActionMarkup": {
+            "chatDataActionMarkup": {
+                "createMessageAction": {
+                    "message": {
+                        "text": text,
+                        "cardsV2": cards,
+                    }
+                }
+            }
+        }
     }
 
 
@@ -738,7 +760,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v6"}
+    return {"status": "ok", "version": "mia-falaw-bot-v7"}
 
 
 @app.get("/debug-models")
