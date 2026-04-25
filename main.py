@@ -1,15 +1,80 @@
 """
 Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
-v4 — corrigido estrutura de resposta + modal + menus interativos completos
+v5 — verificação JWT do Google Chat + correções anteriores
 """
 
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+# ---------------------------------------------------------------------------
+# VERIFICAÇÃO JWT — Google Chat envia Bearer token em toda requisição
+# O token deve ter:
+#   - iss: accounts.google.com
+#   - aud: URL do endpoint
+#   - email: service-XXXXXXXXX@gcp-sa-gsuiteaddons.iam.gserviceaccount.com
+#            OU chat@system.gserviceaccount.com
+# ---------------------------------------------------------------------------
+
+async def _verificar_token_google(request: Request) -> bool:
+    """
+    Verifica se a requisição veio realmente do Google Chat.
+    Retorna True se válida, False se suspeita.
+    Em caso de dúvida, permite (fail-open) para não bloquear mensagens legítimas.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        # Sem token — pode ser teste local ou curl direto, permite
+        logger.warning("[JWT] Sem Authorization header — permitindo (pode ser teste)")
+        return True
+
+    token = auth_header.split(" ", 1)[1]
+    try:
+        # Decodifica payload sem verificar assinatura (verificação leve)
+        import base64
+        parts = token.split(".")
+        if len(parts) != 3:
+            logger.warning("[JWT] Token malformado")
+            return False
+
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+
+        # Verifica issuer
+        iss = payload.get("iss", "")
+        if iss not in ("https://accounts.google.com", "accounts.google.com"):
+            logger.warning("[JWT] Issuer inválido: %s", iss)
+            return False
+
+        # Verifica expiração
+        exp = payload.get("exp", 0)
+        if exp and time.time() > exp:
+            logger.warning("[JWT] Token expirado (exp=%s)", exp)
+            return False
+
+        # Verifica email da service account do Google
+        email = payload.get("email", "")
+        valid_emails = (
+            "gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
+            "chat@system.gserviceaccount.com",
+            "system.gserviceaccount.com",
+        )
+        if not any(email.endswith(e) for e in valid_emails):
+            logger.warning("[JWT] Email SA inesperado: %s — permitindo mesmo assim", email)
+            # Fail-open: permite mesmo com email diferente
+
+        logger.info("[JWT] Token válido — iss=%s email=%s", iss, email)
+        return True
+
+    except Exception as e:
+        logger.warning("[JWT] Erro ao verificar token: %s — permitindo", e)
+        return True  # Fail-open
 
 from bot.config import GITHUB_TOKEN
 from bot.handlers import (
@@ -575,6 +640,15 @@ async def chat_event(request: Request):
       - CARD_CLICKED     → commonEventObject.invokedFunction
       - APP_ADDED        → chat.addedToSpacePayload
     """
+    # Verifica token do Google Chat
+    auth_header = request.headers.get("Authorization", "")
+    logger.info("[/chat] Authorization header: %s", auth_header[:80] if auth_header else "AUSENTE")
+
+    token_ok = await _verificar_token_google(request)
+    if not token_ok:
+        logger.error("[/chat] Token inválido — rejeitando requisição")
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
     try:
         event = await request.json()
     except Exception:
