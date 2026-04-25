@@ -634,11 +634,7 @@ async def chat_event(event: dict):
         if message:
             texto = (message.get("argumentText") or message.get("text") or "").strip()
             logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
-            try:
-                return await _handle_message({"user": user_info, "message": message})
-            except Exception as exc:
-                logger.exception("[/chat] erro MESSAGE: %s", exc)
-                return _cards_response([_home_card()])
+            return {"text": "Bot recebeu sua mensagem. Em breve o card aparecera."}
 
         # CARD_CLICKED
         button_payload = message_payload.get("buttonClickedPayload") or {}
