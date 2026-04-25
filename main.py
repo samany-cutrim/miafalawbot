@@ -1,6 +1,6 @@
 """
 Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
-v5 — verificação JWT do Google Chat + correções anteriores
+v6 — actionResponse NEW_MESSAGE em todas as respostas de MESSAGE
 """
 
 import json
@@ -14,28 +14,16 @@ from fastapi.responses import JSONResponse
 
 # ---------------------------------------------------------------------------
 # VERIFICAÇÃO JWT — Google Chat envia Bearer token em toda requisição
-# O token deve ter:
-#   - iss: accounts.google.com
-#   - aud: URL do endpoint
-#   - email: service-XXXXXXXXX@gcp-sa-gsuiteaddons.iam.gserviceaccount.com
-#            OU chat@system.gserviceaccount.com
 # ---------------------------------------------------------------------------
 
 async def _verificar_token_google(request: Request) -> bool:
-    """
-    Verifica se a requisição veio realmente do Google Chat.
-    Retorna True se válida, False se suspeita.
-    Em caso de dúvida, permite (fail-open) para não bloquear mensagens legítimas.
-    """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        # Sem token — pode ser teste local ou curl direto, permite
         logger.warning("[JWT] Sem Authorization header — permitindo (pode ser teste)")
         return True
 
     token = auth_header.split(" ", 1)[1]
     try:
-        # Decodifica payload sem verificar assinatura (verificação leve)
         import base64
         parts = token.split(".")
         if len(parts) != 3:
@@ -46,19 +34,16 @@ async def _verificar_token_google(request: Request) -> bool:
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
 
-        # Verifica issuer
         iss = payload.get("iss", "")
         if iss not in ("https://accounts.google.com", "accounts.google.com"):
             logger.warning("[JWT] Issuer inválido: %s", iss)
             return False
 
-        # Verifica expiração
         exp = payload.get("exp", 0)
         if exp and time.time() > exp:
             logger.warning("[JWT] Token expirado (exp=%s)", exp)
             return False
 
-        # Verifica email da service account do Google
         email = payload.get("email", "")
         valid_emails = (
             "gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
@@ -67,14 +52,14 @@ async def _verificar_token_google(request: Request) -> bool:
         )
         if not any(email.endswith(e) for e in valid_emails):
             logger.warning("[JWT] Email SA inesperado: %s — permitindo mesmo assim", email)
-            # Fail-open: permite mesmo com email diferente
 
         logger.info("[JWT] Token válido — iss=%s email=%s", iss, email)
         return True
 
     except Exception as e:
         logger.warning("[JWT] Erro ao verificar token: %s — permitindo", e)
-        return True  # Fail-open
+        return True
+
 
 from bot.config import GITHUB_TOKEN
 from bot.handlers import (
@@ -95,7 +80,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v4 iniciado.")
+    logger.info("Mia Falaw Bot v6 iniciado.")
     yield
 
 
@@ -104,7 +89,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v4"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v6"}
 
 
 # ---------------------------------------------------------------------------
@@ -147,18 +132,27 @@ def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: s
     }
 
 
-# Respostas para evento MESSAGE
+# Respostas para evento MESSAGE — SEMPRE com actionResponse NEW_MESSAGE
 def _message_cards_response(cards: list[dict]) -> dict:
-    return {"cardsV2": cards}
+    return {
+        "actionResponse": {"type": "NEW_MESSAGE"},
+        "cardsV2": cards,
+    }
 
 
 def _message_text_response(text: str) -> dict:
-    return {"text": text}
+    return {
+        "actionResponse": {"type": "NEW_MESSAGE"},
+        "text": text,
+    }
 
 
 def _message_text_and_cards(text: str, cards: list[dict]) -> dict:
-    """Texto + cards — fallback que garante exibição no Google Chat."""
-    return {"text": text, "cardsV2": cards}
+    return {
+        "actionResponse": {"type": "NEW_MESSAGE"},
+        "text": text,
+        "cardsV2": cards,
+    }
 
 
 # Respostas para CARD_CLICKED
@@ -560,7 +554,6 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                 cliente=cliente,
                 tipo_responsabilidade=tipo,
             )
-            # Após fechar o dialog, envia nova mensagem com análise
             return {
                 "actionResponse": {"type": "NEW_MESSAGE"},
                 "cardsV2": [_analysis_actions_card(resultado)],
@@ -632,14 +625,6 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
 
 @app.post("/chat")
 async def chat_event(request: Request):
-    """
-    Recebe todos os eventos do Google Chat App.
-
-    Tipos de evento:
-      - MESSAGE          → chat.messagePayload.message
-      - CARD_CLICKED     → commonEventObject.invokedFunction
-      - APP_ADDED        → chat.addedToSpacePayload
-    """
     # Verifica token do Google Chat
     auth_header = request.headers.get("Authorization", "")
     logger.info("[/chat] Authorization header: %s", auth_header[:80] if auth_header else "AUSENTE")
@@ -753,7 +738,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v4"}
+    return {"status": "ok", "version": "mia-falaw-bot-v6"}
 
 
 @app.get("/debug-models")
