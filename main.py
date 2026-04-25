@@ -1,45 +1,27 @@
 """
-Mia Falaw Bot
-
-Modo principal sem admin de Workspace:
-- Google Apps Script + Incoming Webhook + endpoints HTTP.
-
-Modo opcional:
-- Google Chat App (endpoint /chat), se houver permissao.
+Mia Falaw Bot — Google Chat App (endpoint HTTP direto no Render)
 """
 
-import base64
+import json
 import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from bot.config import GITHUB_TOKEN
 from bot.handlers import (
-    cancelar_sessao,
     cancelar_sessao_data,
-    confirmar_sessao,
     confirmar_sessao_data,
-    corrigir_sessao,
     corrigir_sessao_data,
-    dispensar_email_sessao,
     dispensar_email_sessao_data,
     esta_aguardando_correcao,
-    gerar_email_sessao,
     gerar_email_sessao_data,
-    get_ajuda_card,
-    get_link,
     marcar_aguardando_correcao,
     processar_busca,
-    processar_pdf,
-    processar_pdf_bytes,
-    processar_texto,
     processar_texto_chat,
 )
-from bot.webhook import send_card, send_webhook
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -60,213 +42,7 @@ async def root():
 
 
 # ---------------------------------------------------------------------------
-# REQUEST MODELS (Apps Script / Webhook)
-# ---------------------------------------------------------------------------
-
-class PdfRequest(BaseModel):
-    pdf_url: str
-    advogado: str
-    texto: str = ""
-    webhook_url: str
-
-
-class PdfBase64Request(BaseModel):
-    pdf_base64: str
-    advogado: str
-    texto: str = ""
-    webhook_url: str
-
-
-class TextoRequest(BaseModel):
-    texto_pdf: str
-    advogado: str
-    texto: str = ""
-    webhook_url: str
-
-
-class TextoSyncRequest(BaseModel):
-    texto_pdf: str
-    advogado: str
-    texto: str = ""
-
-
-class BuscaRequest(BaseModel):
-    tipo: str
-    tema: str
-    webhook_url: str
-
-
-class BuscaSyncRequest(BaseModel):
-    tipo: str
-    tema: str
-
-
-class AjudaRequest(BaseModel):
-    webhook_url: str
-
-
-class LinkRequest(BaseModel):
-    webhook_url: str
-
-
-class ConfirmarRequest(BaseModel):
-    advogado: str
-    webhook_url: str
-
-
-class CancelarRequest(BaseModel):
-    advogado: str
-    webhook_url: str
-
-
-class CorrigirRequest(BaseModel):
-    advogado: str
-    instrucao: str
-    webhook_url: str
-
-
-class SimRequest(BaseModel):
-    advogado: str
-    webhook_url: str
-
-
-class NaoRequest(BaseModel):
-    advogado: str
-    webhook_url: str
-
-
-# ---------------------------------------------------------------------------
-# APPS SCRIPT / WEBHOOK ENDPOINTS (SEM ADMIN)
-# ---------------------------------------------------------------------------
-
-@app.post("/ajuda")
-async def ajuda(req: AjudaRequest):
-    await send_card(req.webhook_url, get_ajuda_card())
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/link")
-async def link(req: LinkRequest):
-    await send_webhook(req.webhook_url, get_link())
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/buscar")
-async def buscar(req: BuscaRequest):
-    await send_webhook(req.webhook_url, "🔍 Buscando precedentes...")
-    try:
-        resultado = await processar_busca(req.tipo, req.tema)
-        await send_webhook(req.webhook_url, resultado)
-    except Exception as e:
-        logger.exception("Erro na busca: %s", e)
-        await send_webhook(req.webhook_url, "⚠️ Erro ao buscar precedentes.")
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/buscar-sync")
-async def buscar_sync(req: BuscaSyncRequest):
-    """Retorna resultado da busca diretamente, sem webhook (para o Chat App modal)."""
-    try:
-        resultado = await processar_busca(req.tipo, req.tema)
-        return JSONResponse({"status": "ok", "resultado": resultado})
-    except Exception as e:
-        logger.exception("Erro na busca sync: %s", e)
-        return JSONResponse({"status": "erro", "mensagem": "Erro ao buscar precedentes."}, status_code=500)
-
-
-@app.post("/confirmar")
-async def confirmar(req: ConfirmarRequest):
-    await confirmar_sessao(req.advogado, req.webhook_url)
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/cancelar")
-async def cancelar(req: CancelarRequest):
-    await cancelar_sessao(req.advogado, req.webhook_url)
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/corrigir")
-async def corrigir(req: CorrigirRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(corrigir_sessao, req.advogado, req.instrucao, req.webhook_url)
-    return JSONResponse({"status": "corrigindo"})
-
-
-@app.post("/sim")
-async def sim(req: SimRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(gerar_email_sessao, req.advogado, req.webhook_url)
-    return JSONResponse({"status": "gerando_email"})
-
-
-@app.post("/nao")
-async def nao(req: NaoRequest):
-    await dispensar_email_sessao(req.advogado, req.webhook_url)
-    return JSONResponse({"status": "ok"})
-
-
-@app.post("/processar-texto")
-async def processar_texto_endpoint(req: TextoRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(_run_texto, req)
-    return JSONResponse({"status": "processando"})
-
-
-@app.post("/processar-texto-sync")
-async def processar_texto_sync(req: TextoSyncRequest):
-    """Processa texto de forma síncrona para uso no fluxo do Chat App modal.
-    Não inclui o texto de confirmação (/confirmar, /cancelar...) — os botões
-    são exibidos diretamente na card pelo Apps Script.
-    """
-    try:
-        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, webhook_url="", include_confirmacao_text=False)
-        return JSONResponse({"status": "ok", "resultado": resultado})
-    except Exception as e:
-        logger.exception("Erro ao processar texto (sync): %s", e)
-        return JSONResponse({"status": "erro", "mensagem": "Erro ao processar a decisão."}, status_code=500)
-
-
-@app.post("/processar-base64")
-async def processar_base64(req: PdfBase64Request, background_tasks: BackgroundTasks):
-    background_tasks.add_task(_run_pdf_base64, req)
-    return JSONResponse({"status": "processando"})
-
-
-@app.post("/processar")
-async def processar(req: PdfRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(_run_pdf, req)
-    return JSONResponse({"status": "processando"})
-
-
-async def _run_texto(req: TextoRequest):
-    try:
-        resultado = await processar_texto(req.texto_pdf, req.advogado, req.texto, req.webhook_url)
-        await send_webhook(req.webhook_url, resultado)
-    except Exception as e:
-        logger.exception("Erro ao processar texto: %s", e)
-        await send_webhook(req.webhook_url, "⚠️ Erro ao processar a decisao. Tente reenviar.")
-
-
-async def _run_pdf_base64(req: PdfBase64Request):
-    try:
-        pdf_bytes = base64.b64decode(req.pdf_base64)
-        resultado = await processar_pdf_bytes(pdf_bytes, req.advogado, req.texto, req.webhook_url)
-        await send_webhook(req.webhook_url, resultado)
-    except Exception as e:
-        logger.exception("Erro ao processar PDF base64: %s", e)
-        await send_webhook(req.webhook_url, "⚠️ Erro ao processar a decisao. Tente reenviar.")
-
-
-async def _run_pdf(req: PdfRequest):
-    try:
-        await send_webhook(req.webhook_url, "⏳ Analisando decisao... Aguarde.")
-        resultado = await processar_pdf(req.pdf_url, req.advogado, req.texto, req.webhook_url)
-        await send_webhook(req.webhook_url, resultado)
-    except Exception as e:
-        logger.exception("Erro ao processar PDF: %s", e)
-        await send_webhook(req.webhook_url, "⚠️ Erro ao processar a decisao. Tente reenviar.")
-
-
-# ---------------------------------------------------------------------------
-# ENDPOINT /chat (opcional, se houver permissao para Chat App)
+# ENDPOINT /chat — Google Chat App
 # ---------------------------------------------------------------------------
 
 def _as_html(text: str) -> str:
@@ -618,11 +394,13 @@ async def _handle_card_click_new(advogado: str, function_name: str, event: dict)
 
 @app.post("/chat")
 async def chat_event(event: dict):
+    logger.info("[/chat] RAW: %s", json.dumps(event, ensure_ascii=False)[:3000])
+
     chat_data = event.get("chat") or {}
     common = event.get("commonEventObject") or {}
     message_payload = chat_data.get("messagePayload") or {}
 
-    # CARD_CLICKED: para Add-ons, function fica em commonEventObject.invokedFunction
+    # CARD_CLICKED: function em commonEventObject.invokedFunction
     invoked_function = common.get("invokedFunction") or ""
     if invoked_function:
         user_info = chat_data.get("user") or {}
@@ -641,79 +419,59 @@ async def chat_event(event: dict):
             logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
             return _update_text_response("Ocorreu um erro. Tente novamente.")
 
-    logger.info("[/chat] keys=%s payload_keys=%s", list(event.keys()), list(message_payload.keys()))
+    logger.info("[/chat] keys=%s payload_keys=%s chat_keys=%s", list(event.keys()), list(message_payload.keys()), list(chat_data.keys()))
 
-    # Novo formato: dados em event['chat']['messagePayload']
-    if chat_data and message_payload:
-        user_info = chat_data.get("user") or {}
-        advogado = user_info.get("displayName") or "Advogado"
+    user_info = chat_data.get("user") or {}
+    advogado = user_info.get("displayName") or "Advogado"
 
-        # MESSAGE
-        message = message_payload.get("message") or {}
-        if message:
-            texto = (message.get("argumentText") or message.get("text") or "").strip()
-            logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
-            try:
-                return await _handle_message({"user": user_info, "message": message})
-            except Exception as exc:
-                logger.exception("[/chat] erro MESSAGE: %s", exc)
-                return _cards_response([_home_card()])
+    # CARD_CLICKED: buttonClickedPayload pode estar em chat_data ou em messagePayload
+    button_payload = chat_data.get("buttonClickedPayload") or message_payload.get("buttonClickedPayload") or {}
+    if button_payload:
+        logger.info("[/chat] CARD_CLICKED payload: %s", str(button_payload)[:1000])
+        action = button_payload.get("action") or {}
+        function_name = action.get("function") or action.get("actionMethodName") or ""
+        params = action.get("parameters") or []
+        raw_form = button_payload.get("formInputs") or {}
+        compat_form = {
+            k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
+            for k, v in raw_form.items()
+        }
+        for p in params:
+            if "key" in p:
+                compat_form[p["key"]] = {"stringInputs": {"value": [p["value"]]}}
+        logger.info("[/chat] CARD_CLICKED user=%s function=%s form=%s", advogado, function_name, list(compat_form.keys()))
+        compat_event = {"user": user_info, "common": {"invokedFunction": function_name, "formInputs": compat_form}}
+        try:
+            return await _handle_card_click_new(advogado, function_name, compat_event)
+        except Exception as exc:
+            logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
+            return _text_response("Ocorreu um erro. Tente novamente.")
 
-        # CARD_CLICKED
-        button_payload = message_payload.get("buttonClickedPayload") or {}
-        if button_payload:
-            logger.info("[/chat] CARD_CLICKED payload: %s", str(button_payload)[:1000])
-            action = button_payload.get("action") or {}
-            function_name = action.get("function") or action.get("actionMethodName") or ""
-            params = action.get("parameters") or []
-            raw_form = button_payload.get("formInputs") or {}
-            compat_form = {
-                k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
-                for k, v in raw_form.items()
-            }
-            for p in params:
-                if "key" in p:
-                    compat_form[p["key"]] = {"stringInputs": {"value": [p["value"]]}}
-            logger.info("[/chat] CARD_CLICKED user=%s function=%s form=%s", advogado, function_name, list(compat_form.keys()))
-            compat_event = {"user": user_info, "common": {"invokedFunction": function_name, "formInputs": compat_form}}
-            try:
-                return await _handle_card_click_new(advogado, function_name, compat_event)
-            except Exception as exc:
-                logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
-                return _text_response("Ocorreu um erro. Tente novamente.")
+    # MESSAGE: em messagePayload ou chat_data direto
+    message = message_payload.get("message") or chat_data.get("message") or {}
+    if message:
+        texto = (message.get("argumentText") or message.get("text") or "").strip()
+        logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
+        try:
+            return await _handle_message({"user": user_info, "message": message})
+        except Exception as exc:
+            logger.exception("[/chat] erro MESSAGE: %s", exc)
+            return _cards_response([_home_card()])
 
-        logger.warning("[/chat] messagePayload desconhecido: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:1000])
-        return _cards_response([_home_card()])
+    logger.warning("[/chat] evento nao tratado chat_keys=%s full_chat=%s", list(chat_data.keys()), str(chat_data)[:500])
+    return _cards_response([_home_card()])
 
-    # Evento de autorizacao / verificacao do endpoint
+    # Evento de autorizacao / verificacao do endpoint — retorna vazio
     if "authorizationEventObject" in event:
         return {}
 
-    # Formato legado com type no nivel raiz
-    event_type = event.get("type", "")
-    logger.info("[/chat] legado tipo=%s", event_type)
-    if event_type == "ADDED_TO_SPACE":
-        return _cards_response([_home_card()])
-    if event_type == "MESSAGE":
-        try:
-            return await _handle_message(event)
-        except Exception as exc:
-            logger.exception("[/chat] erro _handle_message: %s", exc)
-            return _cards_response([_home_card()])
-    if event_type == "CARD_CLICKED":
-        try:
-            return await _handle_card_click(event)
-        except Exception as exc:
-            logger.exception("[/chat] erro _handle_card_click: %s", exc)
-            return _text_response("Ocorreu um erro. Tente novamente.")
-
-    logger.warning("[/chat] evento nao tratado: %s", event_type)
+    logger.warning("[/chat] evento nao reconhecido: %s", str(event)[:500])
     return _text_response("Evento nao suportado.")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v2-appscript"}
+    return {"status": "ok", "version": "mia-falaw-bot-v3-chatapp"}
 
 
 @app.get("/debug-models")
