@@ -645,9 +645,12 @@ async def _handle_card_click_new(advogado: str, function_name: str, event: dict)
 
 @app.post("/chat")
 async def chat_event(event: dict):
+    # Log completo para diagnóstico
     chat_data = event.get("chat") or {}
+    chat_keys = list(chat_data.keys())
+    logger.info("[/chat] EVENTO COMPLETO: %s", str(event)[:3000])
+
     message_payload = chat_data.get("messagePayload") or {}
-    logger.info("[/chat] keys=%s payload_keys=%s", list(event.keys()), list(message_payload.keys()))
 
     # Novo formato: dados em event['chat']['messagePayload']
     if chat_data and message_payload:
