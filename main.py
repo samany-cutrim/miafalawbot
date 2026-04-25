@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v13 iniciado.")
+    logger.info("Mia Falaw Bot v14 iniciado.")
     yield
 
 
@@ -92,7 +92,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v13"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v14"}
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +221,15 @@ def _new_message_text(text: str) -> dict:
 
 
 def _dialog_action_response(dialog_body: dict) -> dict:
-    # Workspace Add-on: dialog abre via renderActions > pushCard
+    # Chat Add-on: abre dialog via hostAppDataAction > openDialogAction
     return {
-        "renderActions": {
-            "action": {
-                "navigations": [{
-                    "pushCard": dialog_body
-                }]
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "openDialogAction": {
+                    "dialog": {
+                        "body": dialog_body
+                    }
+                }
             }
         }
     }
@@ -471,10 +473,14 @@ def _decision_dialog_body() -> dict:
 
 
 def _dialog_response() -> dict:
-    # dialog.body é um Card: header + sections
+    # dialog.body é um Card completo com header + sections
+    body = _decision_dialog_body()
     card = {
-        "header": {"title": "Mia Falaw Bot", "subtitle": "Nova decisão para análise"},
-        "sections": _decision_dialog_body()["sections"]
+        "header": {
+            "title": "Mia Falaw Bot",
+            "subtitle": "Nova decisão para análise"
+        },
+        "sections": body["sections"]
     }
     return _dialog_action_response(card)
 
@@ -725,6 +731,7 @@ async def chat_event(request: Request):
                     advogado, function_name, list(compat_form.keys()))
         try:
             result = await _handle_card_click(advogado, function_name, compat_event)
+            logger.info("[/chat] CARD_CLICKED response: %s", json.dumps(result, ensure_ascii=False)[:500])
             return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
@@ -799,7 +806,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v13"}
+    return {"status": "ok", "version": "mia-falaw-bot-v14"}
 
 
 @app.get("/debug-models")
