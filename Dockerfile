@@ -15,4 +15,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # 4 workers = até ~40 requisições simultâneas sem problema
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "4"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--loop", "asyncio", "--timeout-keep-alive", "30"]
