@@ -579,41 +579,40 @@ async def _handle_message(event: dict) -> dict:
 
                 from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
                 from google.oauth2 import service_account
-                import google.auth.transport.requests
+                import google.auth.transport.requests as _ga_requests
                 import httpx as _httpx
-                from googleapiclient.discovery import build
-                from googleapiclient.http import MediaIoBaseDownload
                 import io as _io
 
-                creds = service_account.Credentials.from_service_account_file(
+                # Obtém token Bearer da SA com escopo chat.bot
+                _creds = service_account.Credentials.from_service_account_file(
                     GOOGLE_SERVICE_ACCOUNT_FILE,
                     scopes=["https://www.googleapis.com/auth/chat.bot"]
                 )
+                _auth_req = _ga_requests.Request()
+                _creds.refresh(_auth_req)
+                _token = _creds.token
 
-                # Usa googleapiclient para download correto
-                chat_service = build("chat", "v1", credentials=creds)
+                # Download direto via HTTP — sem googleapiclient/build()
+                # O resourceName já está no evento, não precisa buscar metadata
+                _download_url = (
+                    f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
+                )
+                logger.info("[PDF] Baixando via httpx: %s", _download_url[:120])
 
-                # Primeiro busca o attachment para obter resourceName atualizado
-                attachment_name_full = pdf_attachment.get("name") or ""
-                if attachment_name_full:
-                    try:
-                        att_meta = chat_service.spaces().messages().attachments().get(
-                            name=attachment_name_full
-                        ).execute()
-                        data_ref = att_meta.get("attachmentDataRef") or {}
-                        resource_name = data_ref.get("resourceName") or resource_name
-                        logger.info("[PDF] resourceName atualizado: %s", resource_name[:80])
-                    except Exception as e:
-                        logger.warning("[PDF] Não conseguiu buscar metadata: %s", e)
+                async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
+                    _resp = await _client.get(
+                        _download_url,
+                        headers={"Authorization": f"Bearer {_token}"}
+                    )
 
-                # Download via media API
-                request = chat_service.media().download_media(resourceName=resource_name)
-                file_buf = _io.BytesIO()
-                downloader = MediaIoBaseDownload(file_buf, request)
-                done = False
-                while not done:
-                    _, done = downloader.next_chunk()
-                pdf_bytes = file_buf.getvalue()
+                if _resp.status_code != 200:
+                    logger.error("[PDF] Erro no download HTTP %s: %s", _resp.status_code, _resp.text[:300])
+                    return _message_text_response(
+                        f"⚠️ Não consegui baixar o PDF (HTTP {_resp.status_code}). Tente reenviar o arquivo."
+                    )
+
+                pdf_bytes = _resp.content
+                logger.info("[PDF] Download OK — %d bytes", len(pdf_bytes))
 
                 texto_pdf = extrair_texto_pdf(pdf_bytes)
                 resultado = await processar_texto_chat(
