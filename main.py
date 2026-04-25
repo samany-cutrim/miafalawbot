@@ -511,20 +511,81 @@ async def _handle_card_click(event: dict) -> dict:
 
 @app.post("/chat")
 async def chat_event(event: dict):
-    logger.info("[/chat] keys=%s type=%r chat_keys=%s", list(event.keys()), event.get("type"), list((event.get("chat") or {}).keys()))
+    chat_data = event.get("chat") or {}
+    message_payload = chat_data.get("messagePayload") or {}
+    logger.info("[/chat] keys=%s chat_keys=%s payload_keys=%s", list(event.keys()), list(chat_data.keys()), list(message_payload.keys()))
 
-    # Evento de autorização do Google Chat (verificação do endpoint)
-    if "authorizationEventObject" in event and not event.get("type"):
-        chat_data = event.get("chat") or {}
-        logger.info("[/chat] authorizationEventObject chat=%s", str(chat_data)[:500])
-        # Se há dados de mensagem dentro do chat, processar normalmente
-        if chat_data.get("type"):
-            event = {**event, **chat_data}
-        else:
-            return {}
+    # Formato novo: evento fica em event['chat']['messagePayload']
+    if chat_data and message_payload:
+        user_info = chat_data.get("user") or {}
+        advogado = user_info.get("displayName") or "Advogado"
 
+        # MESSAGE
+        message = message_payload.get("message") or {}
+        if message:
+            texto = (message.get("argumentText") or message.get("text") or "").strip()
+            logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
+            try:
+                from bot.handlers import esta_aguardando_correcao, corrigir_sessao_data
+                if await esta_aguardando_correcao(advogado):
+                    if not texto:
+                        return _text_response("Informe no chat a instrucao de correcao.")
+                    ok, msg = await corrigir_sessao_data(advogado, texto)
+                    if not ok:
+                        return _text_response(msg)
+                    return _cards_response([_analysis_actions_card(msg)])
+            except Exception as exc:
+                logger.exception("[/chat] erro MESSAGE: %s", exc)
+            return _cards_response([_home_card()])
+
+        # CARD_CLICKED
+        button_payload = message_payload.get("buttonClickedPayload") or {}
+        if button_payload:
+            function_name = (button_payload.get("action") or {}).get("function") or ""
+            form_inputs = (button_payload.get("action") or {}).get("parameters") or []
+            logger.info("[/chat] CARD_CLICKED user=%s function=%s", advogado, function_name)
+            # Montar evento compatível com _handle_card_click
+            compat_event = {
+                "user": user_info,
+                "common": {
+                    "invokedFunction": function_name,
+                    "formInputs": {p["key"]: {"stringInputs": {"value": [p["value"]]}} for p in form_inputs if "key" in p},
+                },
+            }
+            try:
+                return await _handle_card_click(compat_event)
+            except Exception as exc:
+                logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
+                return _text_response("Ocorreu um erro. Tente novamente.")
+
+        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: %s", list(message_payload.keys()))
+        return _cards_response([_home_card()])
+
+    # Evento de autorização sem payload (verificação inicial)
+    if "authorizationEventObject" in event:
+        return {}
+
+    # Formato legado com type no nível raiz
     event_type = event.get("type", "")
-    logger.info("[/chat] tipo=%s user=%s", event_type, (event.get("user") or event.get("message", {}).get("sender") or {}).get("displayName", "?"))
+    logger.info("[/chat] legado tipo=%s", event_type)
+
+    if event_type == "ADDED_TO_SPACE":
+        return _cards_response([_home_card()])
+    if event_type == "MESSAGE":
+        try:
+            return await _handle_message(event)
+        except Exception as exc:
+            logger.exception("[/chat] erro _handle_message: %s", exc)
+            return _cards_response([_home_card()])
+    if event_type == "CARD_CLICKED":
+        try:
+            return await _handle_card_click(event)
+        except Exception as exc:
+            logger.exception("[/chat] erro _handle_card_click: %s", exc)
+            return _text_response("Ocorreu um erro. Tente novamente.")
+
+    logger.warning("[/chat] evento nao tratado: %s | payload: %s", event_type, str(event)[:500])
+    return _text_response("Evento nao suportado.")
 
     if event_type == "ADDED_TO_SPACE":
         return _cards_response([_home_card()])
