@@ -479,37 +479,65 @@ def _dialog_response() -> dict:
 
 
 def _text_response(text: str) -> dict:
-    return {"text": text}
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"text": text}
+                }
+            }
+        }
+    }
 
 
 def _cards_response(cards: list[dict]) -> dict:
-    return {"cardsV2": cards}
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"cardsV2": cards}
+                }
+            }
+        }
+    }
 
 
 def _update_cards_response(cards: list[dict]) -> dict:
-    """Usado em CARD_CLICKED para atualizar card existente."""
+    """Usado em CARD_CLICKED para enviar novo card."""
     return {
-        "actionResponse": {"type": "UPDATE_MESSAGE"},
-        "cardsV2": cards,
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"cardsV2": cards}
+                }
+            }
+        }
     }
 
 
 def _update_text_response(text: str) -> dict:
     """Usado em CARD_CLICKED para responder com texto."""
     return {
-        "actionResponse": {"type": "NEW_MESSAGE"},
-        "text": text,
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"text": text}
+                }
+            }
+        }
     }
 
 
 def _dialog_action_response(dialog_body: dict) -> dict:
     """Abre um dialog em resposta a CARD_CLICKED."""
     return {
-        "actionResponse": {
-            "type": "DIALOG",
-            "dialogAction": {
-                "dialog": {"body": dialog_body},
-            },
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "openDialogAction": {
+                    "actionStatus": {"statusCode": "OK"},
+                    "dialog": {"body": dialog_body},
+                }
+            }
         }
     }
 
