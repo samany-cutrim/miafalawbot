@@ -449,6 +449,32 @@ def _cards_response(cards: list[dict]) -> dict:
     return {"cardsV2": cards}
 
 
+def _new_format_text(text: str) -> dict:
+    """Formato de resposta para o novo evento Chat com authorizationEventObject."""
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"text": text}
+                }
+            }
+        }
+    }
+
+
+def _new_format_cards(cards: list[dict]) -> dict:
+    """Formato de resposta para o novo evento Chat com authorizationEventObject."""
+    return {
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "createMessageAction": {
+                    "message": {"cardsV2": cards}
+                }
+            }
+        }
+    }
+
+
 async def _handle_message(event: dict) -> dict:
     advogado = _user_name(event)
     texto = _message_text(event)
@@ -465,9 +491,14 @@ async def _handle_message(event: dict) -> dict:
 
 
 async def _handle_card_click(event: dict) -> dict:
+    """Formato legado (type no nivel raiz)."""
     advogado = _user_name(event)
     function_name = _action_function(event)
+    return await _handle_card_click_new(advogado, function_name, event)
 
+
+async def _handle_card_click_new(advogado: str, function_name: str, event: dict) -> dict:
+    """Logica de card click com respostas no novo formato."""
     if function_name == "open_decision_dialog":
         return _dialog_response()
 
@@ -477,7 +508,7 @@ async def _handle_card_click(event: dict) -> dict:
         decisao = _form_value(event, "decisao")
 
         if not decisao:
-            return _text_response("Informe o conteudo da decisao no campo do modal.")
+            return _new_format_text("Informe o conteudo da decisao no campo do modal.")
 
         resultado = await processar_texto_chat(
             texto_pdf=decisao,
@@ -485,28 +516,28 @@ async def _handle_card_click(event: dict) -> dict:
             cliente=cliente,
             tipo_responsabilidade=tipo,
         )
-        return _cards_response([_analysis_actions_card(resultado)])
+        return _new_format_cards([_analysis_actions_card(resultado)])
 
     if function_name == "confirm_decision":
         mensagem, oferecer_email = await confirmar_sessao_data(advogado)
         cards = [_card_with_buttons("Confirmacao", mensagem, [], "confirmation")]
         if oferecer_email:
             cards.append(_email_choice_card())
-        return _cards_response(cards)
+        return _new_format_cards(cards)
 
     if function_name == "cancel_decision":
-        return _text_response(await cancelar_sessao_data(advogado))
+        return _new_format_text(await cancelar_sessao_data(advogado))
 
     if function_name == "request_correction":
-        return _text_response(await marcar_aguardando_correcao(advogado))
+        return _new_format_text(await marcar_aguardando_correcao(advogado))
 
     if function_name == "email_yes":
-        return _text_response(await gerar_email_sessao_data(advogado))
+        return _new_format_text(await gerar_email_sessao_data(advogado))
 
     if function_name == "email_no":
-        return _text_response(await dispensar_email_sessao_data(advogado))
+        return _new_format_text(await dispensar_email_sessao_data(advogado))
 
-    return _text_response("Acao nao reconhecida.")
+    return _new_format_text("Acao nao reconhecida.")
 
 
 @app.post("/chat")
@@ -529,14 +560,14 @@ async def chat_event(event: dict):
                 from bot.handlers import esta_aguardando_correcao, corrigir_sessao_data
                 if await esta_aguardando_correcao(advogado):
                     if not texto:
-                        return _text_response("Informe no chat a instrucao de correcao.")
+                        return _new_format_text("Informe no chat a instrucao de correcao.")
                     ok, msg = await corrigir_sessao_data(advogado, texto)
                     if not ok:
-                        return _text_response(msg)
-                    return _cards_response([_analysis_actions_card(msg)])
+                        return _new_format_text(msg)
+                    return _new_format_cards([_analysis_actions_card(msg)])
             except Exception as exc:
                 logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return _text_response("Ola! Bot funcionando. Retornando card em breve.")
+            return _new_format_cards([_home_card()])
 
         # CARD_CLICKED
         button_payload = message_payload.get("buttonClickedPayload") or {}
@@ -544,7 +575,6 @@ async def chat_event(event: dict):
             function_name = (button_payload.get("action") or {}).get("function") or ""
             form_inputs = (button_payload.get("action") or {}).get("parameters") or []
             logger.info("[/chat] CARD_CLICKED user=%s function=%s", advogado, function_name)
-            # Montar evento compatível com _handle_card_click
             compat_event = {
                 "user": user_info,
                 "common": {
@@ -553,13 +583,13 @@ async def chat_event(event: dict):
                 },
             }
             try:
-                return await _handle_card_click(compat_event)
+                return await _handle_card_click_new(advogado, function_name, compat_event)
             except Exception as exc:
                 logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
-                return _text_response("Ocorreu um erro. Tente novamente.")
+                return _new_format_text("Ocorreu um erro. Tente novamente.")
 
         logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: %s", list(message_payload.keys()))
-        return _cards_response([_home_card()])
+        return _new_format_cards([_home_card()])
 
     # Evento de autorização sem payload (verificação inicial)
     if "authorizationEventObject" in event:
