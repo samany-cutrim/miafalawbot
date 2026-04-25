@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v22 iniciado.")
+    logger.info("Mia Falaw Bot v23 iniciado.")
     yield
 
 
@@ -96,7 +96,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v22"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v23"}
 
 
 # ---------------------------------------------------------------------------
@@ -581,19 +581,39 @@ async def _handle_message(event: dict) -> dict:
                 from google.oauth2 import service_account
                 import google.auth.transport.requests
                 import httpx as _httpx
+                from googleapiclient.discovery import build
+                from googleapiclient.http import MediaIoBaseDownload
+                import io as _io
 
                 creds = service_account.Credentials.from_service_account_file(
                     GOOGLE_SERVICE_ACCOUNT_FILE,
                     scopes=["https://www.googleapis.com/auth/chat.bot"]
                 )
-                creds.refresh(google.auth.transport.requests.Request())
 
-                # Chat Media API: GET /v1/media/{resourceName}?alt=media
-                media_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
-                async with _httpx.AsyncClient(timeout=60) as c:
-                    r = await c.get(media_url, headers={"Authorization": f"Bearer {creds.token}"})
-                    r.raise_for_status()
-                    pdf_bytes = r.content
+                # Usa googleapiclient para download correto
+                chat_service = build("chat", "v1", credentials=creds)
+
+                # Primeiro busca o attachment para obter resourceName atualizado
+                attachment_name_full = pdf_attachment.get("name") or ""
+                if attachment_name_full:
+                    try:
+                        att_meta = chat_service.spaces().messages().attachments().get(
+                            name=attachment_name_full
+                        ).execute()
+                        data_ref = att_meta.get("attachmentDataRef") or {}
+                        resource_name = data_ref.get("resourceName") or resource_name
+                        logger.info("[PDF] resourceName atualizado: %s", resource_name[:80])
+                    except Exception as e:
+                        logger.warning("[PDF] Não conseguiu buscar metadata: %s", e)
+
+                # Download via media API
+                request = chat_service.media().download_media(resourceName=resource_name)
+                file_buf = _io.BytesIO()
+                downloader = MediaIoBaseDownload(file_buf, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                pdf_bytes = file_buf.getvalue()
 
                 texto_pdf = extrair_texto_pdf(pdf_bytes)
                 resultado = await processar_texto_chat(
@@ -906,7 +926,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v22"}
+    return {"status": "ok", "version": "mia-falaw-bot-v23"}
 
 
 @app.get("/debug-models")
