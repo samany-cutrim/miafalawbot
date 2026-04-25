@@ -661,7 +661,7 @@ async def chat_event(request: Request):
     except Exception:
         return JSONResponse({"text": "Erro ao processar requisição."})
 
-logger.info("[/chat] RAW COMPLETO: %s", json.dumps(event, ensure_ascii=False))
+    logger.info("[/chat] RAW: %s", json.dumps(event, ensure_ascii=False)[:2000])
 
     chat_data = event.get("chat") or {}
     common    = event.get("commonEventObject") or {}
