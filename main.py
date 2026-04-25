@@ -515,45 +515,19 @@ def _cards_response(cards: list[dict]) -> dict:
     return {"cardsV2": cards}
 
 
-def _new_format_text(text: str) -> dict:
-    """Formato de resposta para o novo evento Chat com authorizationEventObject."""
-    return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"text": text}
-                }
-            }
-        }
-    }
-
-
-def _new_format_cards(cards: list[dict]) -> dict:
-    """Formato de resposta para o novo evento Chat com authorizationEventObject."""
-    return {
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "createMessageAction": {
-                    "message": {"cardsV2": cards}
-                }
-            }
-        }
-    }
-
-
 async def _handle_message(event: dict) -> dict:
     advogado = _user_name(event)
     texto = _message_text(event).lower()
 
     if await esta_aguardando_correcao(advogado):
         if not texto:
-            return _new_format_text("Informe no chat a instrucao de correcao.")
+            return _text_response("Informe no chat a instrucao de correcao.")
         ok, msg = await corrigir_sessao_data(advogado, texto)
         if not ok:
-            return _new_format_text(msg)
-        return _new_format_cards([_analysis_actions_card(msg)])
+            return _text_response(msg)
+        return _cards_response([_analysis_actions_card(msg)])
 
-    # Busca por mencao direta (@bot favoraveis/desfavoraveis <tema>)
+    # Busca por mencao direta: @bot favoraveis/desfavoraveis <tema>
     import re
     match_fav = re.search(r'favor[aá]veis?\s+(.+)', texto)
     match_des = re.search(r'desfavor[aá]veis?\s+(.+)', texto)
@@ -562,12 +536,12 @@ async def _handle_message(event: dict) -> dict:
         tema = (match_fav or match_des).group(1).strip()
         try:
             resultado = await processar_busca(tipo, tema)
-            return _new_format_cards([_card_with_buttons(f"Precedentes {tipo}", resultado, [], "busca_resultado")])
+            return _cards_response([_card_with_buttons(f"Precedentes {tipo}", resultado, [], "busca_resultado")])
         except Exception as exc:
             logger.exception("[/chat] erro busca mencao: %s", exc)
-            return _new_format_text("Erro ao buscar precedentes.")
+            return _text_response("Erro ao buscar precedentes.")
 
-    return _new_format_cards([_home_card()])
+    return _cards_response([_home_card()])
 
 
 async def _handle_card_click(event: dict) -> dict:
@@ -578,29 +552,32 @@ async def _handle_card_click(event: dict) -> dict:
 
 
 async def _handle_card_click_new(advogado: str, function_name: str, event: dict) -> dict:
-    """Logica de card click com respostas no novo formato."""
     if function_name == "open_home":
-        return _new_format_cards([_home_card()])
+        return _cards_response([_home_card()])
 
     if function_name == "open_ajuda":
-        return _new_format_cards([_ajuda_card()])
+        return _cards_response([_ajuda_card()])
 
     if function_name == "open_busca_card":
-        return _new_format_cards([_busca_card()])
+        return _cards_response([_busca_card()])
 
     if function_name in ("buscar_favoraveis", "buscar_desfavoraveis"):
         tema = _form_value(event, "tema_busca")
         if not tema:
-            return _new_format_text("Informe a empresa ou tema no campo de busca.")
+            return _text_response("Informe a empresa ou tema no campo de busca.")
         tipo = "favoravel" if function_name == "buscar_favoraveis" else "desfavoravel"
         try:
             resultado = await processar_busca(tipo, tema)
-            return _new_format_cards([
-                _card_with_buttons(f"Precedentes {tipo}", resultado, [_primary_button("Nova busca", "open_busca_card"), _primary_button("Menu", "open_home")], "busca_resultado")
+            return _cards_response([
+                _card_with_buttons(
+                    f"Precedentes {tipo}", resultado,
+                    [_primary_button("Nova busca", "open_busca_card"), _primary_button("Menu", "open_home")],
+                    "busca_resultado",
+                )
             ])
         except Exception as exc:
             logger.exception("[/chat] erro busca: %s", exc)
-            return _new_format_text("Erro ao buscar precedentes.")
+            return _text_response("Erro ao buscar precedentes.")
 
     if function_name == "open_decision_dialog":
         return _dialog_response()
@@ -609,47 +586,45 @@ async def _handle_card_click_new(advogado: str, function_name: str, event: dict)
         cliente = _form_value(event, "cliente")
         tipo = _form_value(event, "tipo_responsabilidade")
         decisao = _form_value(event, "decisao")
-
         if not decisao:
-            return _new_format_text("Informe o conteudo da decisao no campo do modal.")
-
+            return _text_response("Informe o conteudo da decisao no campo do modal.")
         resultado = await processar_texto_chat(
             texto_pdf=decisao,
             advogado=advogado,
             cliente=cliente,
             tipo_responsabilidade=tipo,
         )
-        return _new_format_cards([_analysis_actions_card(resultado)])
+        return _cards_response([_analysis_actions_card(resultado)])
 
     if function_name == "confirm_decision":
         mensagem, oferecer_email = await confirmar_sessao_data(advogado)
         cards = [_card_with_buttons("Confirmacao", mensagem, [], "confirmation")]
         if oferecer_email:
             cards.append(_email_choice_card())
-        return _new_format_cards(cards)
+        return _cards_response(cards)
 
     if function_name == "cancel_decision":
-        return _new_format_text(await cancelar_sessao_data(advogado))
+        return _text_response(await cancelar_sessao_data(advogado))
 
     if function_name == "request_correction":
-        return _new_format_text(await marcar_aguardando_correcao(advogado))
+        return _text_response(await marcar_aguardando_correcao(advogado))
 
     if function_name == "email_yes":
-        return _new_format_text(await gerar_email_sessao_data(advogado))
+        return _text_response(await gerar_email_sessao_data(advogado))
 
     if function_name == "email_no":
-        return _new_format_text(await dispensar_email_sessao_data(advogado))
+        return _text_response(await dispensar_email_sessao_data(advogado))
 
-    return _new_format_text("Acao nao reconhecida.")
+    return _text_response("Acao nao reconhecida.")
 
 
 @app.post("/chat")
 async def chat_event(event: dict):
     chat_data = event.get("chat") or {}
     message_payload = chat_data.get("messagePayload") or {}
-    logger.info("[/chat] keys=%s chat_keys=%s payload_keys=%s", list(event.keys()), list(chat_data.keys()), list(message_payload.keys()))
+    logger.info("[/chat] keys=%s payload_keys=%s", list(event.keys()), list(message_payload.keys()))
 
-    # Formato novo: evento fica em event['chat']['messagePayload']
+    # Novo formato: dados em event['chat']['messagePayload']
     if chat_data and message_payload:
         user_info = chat_data.get("user") or {}
         advogado = user_info.get("displayName") or "Advogado"
@@ -660,57 +635,44 @@ async def chat_event(event: dict):
             texto = (message.get("argumentText") or message.get("text") or "").strip()
             logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
             try:
-                from bot.handlers import esta_aguardando_correcao, corrigir_sessao_data
-                if await esta_aguardando_correcao(advogado):
-                    if not texto:
-                        return _new_format_text("Informe no chat a instrucao de correcao.")
-                    ok, msg = await corrigir_sessao_data(advogado, texto)
-                    if not ok:
-                        return _new_format_text(msg)
-                    return _new_format_cards([_analysis_actions_card(msg)])
+                return await _handle_message({"user": user_info, "message": message})
             except Exception as exc:
                 logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return _new_format_cards([_home_card()])
+                return _cards_response([_home_card()])
 
         # CARD_CLICKED
         button_payload = message_payload.get("buttonClickedPayload") or {}
         if button_payload:
-            logger.info("[/chat] CARD_CLICKED payload completo: %s", str(button_payload)[:1000])
+            logger.info("[/chat] CARD_CLICKED payload: %s", str(button_payload)[:1000])
             action = button_payload.get("action") or {}
             function_name = action.get("function") or action.get("actionMethodName") or ""
-            form_inputs = action.get("parameters") or []
-            # formInputs pode vir separado no buttonClickedPayload
+            params = action.get("parameters") or []
             raw_form = button_payload.get("formInputs") or {}
-            compat_form = {k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}} for k, v in raw_form.items()}
-            # parametros simples como lista de {key, value}
-            for p in form_inputs:
+            compat_form = {
+                k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
+                for k, v in raw_form.items()
+            }
+            for p in params:
                 if "key" in p:
                     compat_form[p["key"]] = {"stringInputs": {"value": [p["value"]]}}
-            logger.info("[/chat] CARD_CLICKED user=%s function=%s", advogado, function_name)
-            compat_event = {
-                "user": user_info,
-                "common": {
-                    "invokedFunction": function_name,
-                    "formInputs": compat_form,
-                },
-            }
+            logger.info("[/chat] CARD_CLICKED user=%s function=%s form=%s", advogado, function_name, list(compat_form.keys()))
+            compat_event = {"user": user_info, "common": {"invokedFunction": function_name, "formInputs": compat_form}}
             try:
                 return await _handle_card_click_new(advogado, function_name, compat_event)
             except Exception as exc:
                 logger.exception("[/chat] erro CARD_CLICKED: %s", exc)
-                return _new_format_text("Ocorreu um erro. Tente novamente.")
+                return _text_response("Ocorreu um erro. Tente novamente.")
 
-        logger.warning("[/chat] messagePayload sem message/buttonClickedPayload: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:2000])
-        return _new_format_cards([_home_card()])
+        logger.warning("[/chat] messagePayload desconhecido: keys=%s full=%s", list(message_payload.keys()), str(message_payload)[:1000])
+        return _cards_response([_home_card()])
 
-    # Evento de autorização sem payload (verificação inicial)
+    # Evento de autorizacao / verificacao do endpoint
     if "authorizationEventObject" in event:
         return {}
 
-    # Formato legado com type no nível raiz
+    # Formato legado com type no nivel raiz
     event_type = event.get("type", "")
     logger.info("[/chat] legado tipo=%s", event_type)
-
     if event_type == "ADDED_TO_SPACE":
         return _cards_response([_home_card()])
     if event_type == "MESSAGE":
@@ -726,27 +688,7 @@ async def chat_event(event: dict):
             logger.exception("[/chat] erro _handle_card_click: %s", exc)
             return _text_response("Ocorreu um erro. Tente novamente.")
 
-    logger.warning("[/chat] evento nao tratado: %s | payload: %s", event_type, str(event)[:500])
-    return _text_response("Evento nao suportado.")
-
-    if event_type == "ADDED_TO_SPACE":
-        return _cards_response([_home_card()])
-
-    if event_type == "MESSAGE":
-        try:
-            return await _handle_message(event)
-        except Exception as exc:
-            logger.exception("[/chat] erro em _handle_message: %s", exc)
-            return _cards_response([_home_card()])
-
-    if event_type == "CARD_CLICKED":
-        try:
-            return await _handle_card_click(event)
-        except Exception as exc:
-            logger.exception("[/chat] erro em _handle_card_click: %s", exc)
-            return _text_response("Ocorreu um erro. Tente novamente.")
-
-    logger.warning("[/chat] evento nao tratado: %s | payload: %s", event_type, str(event)[:500])
+    logger.warning("[/chat] evento nao tratado: %s", event_type)
     return _text_response("Evento nao suportado.")
 
 
