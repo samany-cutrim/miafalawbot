@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v10 iniciado.")
+    logger.info("Mia Falaw Bot v11 iniciado.")
     yield
 
 
@@ -92,7 +92,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v10"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v11"}
 
 
 # ---------------------------------------------------------------------------
@@ -699,16 +699,19 @@ async def chat_event(request: Request):
     # ------------------------------------------------------------------
     # 1. CARD_CLICKED — commonEventObject.invokedFunction presente
     # ------------------------------------------------------------------
+    # Workspace Add-on: __method vem em commonEventObject.parameters
+    raw_params = common.get("parameters") or {}
+    method_from_params = raw_params.get("__method") or ""
+
     invoked_function = common.get("invokedFunction") or ""
-    if invoked_function:
+    function_name = method_from_params or invoked_function
+
+    if function_name:
         raw_form = common.get("formInputs") or {}
         compat_form = {
             k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
             for k, v in raw_form.items()
         }
-        # Workspace Add-on: nome real da função está nos parâmetros como __method
-        raw_params = common.get("parameters") or {}
-        function_name = raw_params.get("__method") or invoked_function
         compat_event = {
             "user": user_info,
             "common": {"invokedFunction": function_name, "formInputs": compat_form},
@@ -791,7 +794,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v10"}
+    return {"status": "ok", "version": "mia-falaw-bot-v11"}
 
 
 @app.get("/debug-models")
