@@ -516,15 +516,6 @@ def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
 async def confirmar_sessao(advogado: str, webhook_url: str):
     mensagem, oferecer_email = await confirmar_sessao_data(advogado)
     await send_webhook(webhook_url, mensagem)
-    if oferecer_email:
-        await send_webhook(
-            webhook_url,
-            (
-                f"📧 *{advogado}, deseja uma sugestão de e-mail de reporte ao cliente?*\n\n"
-                f"`/sim` — gerar sugestão de e-mail\n"
-                f"`/nao` — dispensar"
-            ),
-        )
 
 
 async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:

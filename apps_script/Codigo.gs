@@ -80,48 +80,35 @@ function onCardClick(e) {
       actionResponse: { type: "NEW_MESSAGE" },
       cardsV2: [
         {
-          cardId: "analise_iniciada",
+          cardId: "analise_completa",
           card: {
-            header: getBaseCardHeader("Analise iniciada"),
+            header: getBaseCardHeader("Resultado da analise"),
             sections: [
               {
-                widgets: [
-                  {
-                    textParagraph: {
-                      text: resultadoHtml
-                    }
-                  },
-                  {
-                    buttonList: {
-                      buttons: [
-                        {
-                          text: "Confirmar",
-                          onClick: {
-                            action: {
-                              "function": "confirm_decision"
-                            }
-                          }
-                        },
-                        {
-                          text: "Cancelar",
-                          onClick: {
-                            action: {
-                              "function": "cancel_decision"
-                            }
-                          }
-                        },
-                        {
-                          text: "Corrigir",
-                          onClick: {
-                            action: {
-                              "function": "open_correction_dialog"
-                            }
-                          }
-                        }
-                      ]
-                    }
+                widgets: [{
+                  textParagraph: { text: resultadoHtml }
+                }]
+              },
+              {
+                header: "O que deseja fazer?",
+                widgets: [{
+                  buttonList: {
+                    buttons: [
+                      {
+                        text: "Confirmar",
+                        onClick: { action: { "function": "confirm_decision" } }
+                      },
+                      {
+                        text: "Cancelar",
+                        onClick: { action: { "function": "cancel_decision" } }
+                      },
+                      {
+                        text: "Corrigir",
+                        onClick: { action: { "function": "open_correction_dialog" } }
+                      }
+                    ]
                   }
-                ]
+                }]
               }
             ]
           }
@@ -163,16 +150,23 @@ function onCardClick(e) {
     return respostaCardChatAppBusca();
   }
 
+  if (invoked === "open_acoes_card") {
+    return respostaCardChatAppAcoes();
+  }
+
   if (invoked === "open_ajuda") {
     chamarRender("/ajuda", { webhook_url: WEBHOOK_URL });
     return { text: "Ajuda enviada no chat." };
   }
 
   if (invoked === "confirm_decision") {
-    chamarRender("/confirmar", {
+    var respConfirmar = chamarRenderSync("/confirmar", {
       advogado: userName,
       webhook_url: WEBHOOK_URL
     });
+    if (!respConfirmar || respConfirmar.status !== "ok") {
+      return { text: "Nao foi possivel confirmar. Verifique se ha uma analise pendente." };
+    }
     return respostaCardChatAppEmail();
   }
 
@@ -339,6 +333,38 @@ function respostaCardChatAppBusca() {
         }
       }
     ]
+  };
+}
+
+
+function respostaCardChatAppAcoes() {
+  return {
+    cardsV2: [{
+      cardId: "chatapp_acoes",
+      card: {
+        header: getBaseCardHeader("Acoes da analise"),
+        sections: [{
+          widgets: [{
+            buttonList: {
+              buttons: [
+                {
+                  text: "Confirmar",
+                  onClick: { action: { "function": "confirm_decision" } }
+                },
+                {
+                  text: "Cancelar",
+                  onClick: { action: { "function": "cancel_decision" } }
+                },
+                {
+                  text: "Corrigir",
+                  onClick: { action: { "function": "open_correction_dialog" } }
+                }
+              ]
+            }
+          }]
+        }]
+      }
+    }]
   };
 }
 
@@ -564,46 +590,20 @@ function enviarCardMenuPrincipal() {
         {
           widgets: [
             {
-              textParagraph: {
-                text: "<b>Fluxo com botoes (modo Apps Script):</b><br>1) Clique em <b>Enviar decisao</b><br>2) Preencha o formulario (modal simulado)<br>3) Use os botoes/comandos de acao no chat"
-              }
-            },
-            {
               buttonList: {
-                buttons: botoes
+                buttons: botoes.length ? botoes : [{ text: "Abrir app", onClick: { openLink: { url: "https://chat.google.com" } } }]
               }
             },
             {
               textParagraph: {
-                text: "<b>Busca de precedentes:</b>"
-              }
-            },
-            {
-              buttonList: {
-                buttons: [
-                  {
-                    text: "Favoraveis",
-                    onClick: { action: { "function": "buscar_favoraveis" } }
-                  },
-                  {
-                    text: "Desfavoraveis",
-                    onClick: { action: { "function": "buscar_desfavoraveis" } }
-                  }
-                ]
-              }
-            },
-            {
-              decoratedText: {
-                topLabel: "Acoes rapidas",
-                text: "<font face=\"monospace\">/favoraveis [tema]</font> · <font face=\"monospace\">/desfavoraveis [tema]</font>",
-                startIcon: { knownIcon: "DESCRIPTION" }
+                text: "Para buscar precedentes, use o menu do Chat App (botoes Favoraveis / Desfavoraveis)."
               }
             }
           ]
         }
       ]
     },
-    _fallback_text: "Use /menu para abrir os botoes e enviar decisao."
+    _fallback_text: "Use o menu do Chat App para enviar decisoes e buscar precedentes."
   };
 
   chamarWebhookCard(card);
@@ -620,42 +620,14 @@ function enviarCardBuscaPrecedentes() {
           widgets: [
             {
               textParagraph: {
-                text: "Clique no tipo para buscar todos os precedentes na planilha. Para tema especifico, use /favoraveis [tema] ou /desfavoraveis [tema] no chat."
-              }
-            },
-            {
-              buttonList: {
-                buttons: [
-                  {
-                    text: "Favoraveis",
-                    onClick: { action: { "function": "buscar_favoraveis" } }
-                  },
-                  {
-                    text: "Desfavoraveis",
-                    onClick: { action: { "function": "buscar_desfavoraveis" } }
-                  }
-                ]
-              }
-            },
-            {
-              decoratedText: {
-                text: "<font face=\"monospace\">/favoraveis [tema]</font>",
-                bottomLabel: "Busca precedentes favoraveis para a empresa",
-                startIcon: { knownIcon: "STAR" }
-              }
-            },
-            {
-              decoratedText: {
-                text: "<font face=\"monospace\">/desfavoraveis [tema]</font>",
-                bottomLabel: "Busca precedentes desfavoraveis para a empresa",
-                startIcon: { knownIcon: "STAR" }
+                text: "Use os botoes Favoraveis / Desfavoraveis no menu do Chat App para buscar na planilha."
               }
             }
           ]
         }
       ]
     },
-    _fallback_text: "Busca: /favoraveis [tema] ou /desfavoraveis [tema]"
+    _fallback_text: "Busca: use o menu do Chat App (botoes Favoraveis / Desfavoraveis)."
   };
 
   chamarWebhookCard(card);
