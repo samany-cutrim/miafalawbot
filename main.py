@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Mia Falaw Bot v11 iniciado.")
+    logger.info("Mia Falaw Bot v12 iniciado.")
     yield
 
 
@@ -92,7 +92,7 @@ app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "mia-falaw-bot", "version": "v11"}
+    return {"status": "ok", "service": "mia-falaw-bot", "version": "v12"}
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +225,13 @@ def _dialog_action_response(dialog_body: dict) -> dict:
         "hostAppDataAction": {
             "chatDataAction": {
                 "openDialogAction": {
-                    "actionStatus": {"statusCode": "OK"},
-                    "dialog": {"body": dialog_body},
+                    "actionStatus": {
+                        "statusCode": "OK",
+                        "userFacingMessage": ""
+                    },
+                    "dialog": {
+                        "body": dialog_body
+                    }
                 }
             }
         }
@@ -471,7 +476,12 @@ def _decision_dialog_body() -> dict:
 
 
 def _dialog_response() -> dict:
-    return _dialog_action_response(_decision_dialog_body())
+    # dialog.body é um Card: header + sections
+    card = {
+        "header": {"title": "Mia Falaw Bot", "subtitle": "Nova decisão para análise"},
+        "sections": _decision_dialog_body()["sections"]
+    }
+    return _dialog_action_response(card)
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +804,7 @@ async def chat_event(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "mia-falaw-bot-v11"}
+    return {"status": "ok", "version": "mia-falaw-bot-v12"}
 
 
 @app.get("/debug-models")
