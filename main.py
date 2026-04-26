@@ -586,12 +586,9 @@ async def _processar_pdf_background(
 
         primeiro = advogado.strip().split()[0]
         if webhook_url:
-            # Fallback: envia a análise completa como texto para o usuário ler imediatamente.
-            # Os botões de confirmar/cancelar ficam disponíveis ao mencionar @Mia Falaw Bot.
             await send_webhook(
                 webhook_url,
-                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
-                f"_Para confirmar, cancelar ou corrigir: mencione *@Mia Falaw Bot* no chat._"
+                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
             )
 
     except Exception as exc:
@@ -904,9 +901,10 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                 _card_with_buttons("✅ Decisão registrada!", mensagem, [], "confirmation"),
                 _email_choice_card(),
             ])
+        titulo = "✅ Decisão registrada!" if "Perfeito" in mensagem else "⚠️ Erro ao salvar"
         return _update_message_cards([
             _card_with_buttons(
-                "✅ Decisão registrada!",
+                titulo,
                 mensagem,
                 [_primary_button("◀ Menu", "open_home")],
                 "confirmation",
@@ -1215,8 +1213,7 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                         primeiro = advogado.strip().split()[0]
                         await send_webhook(
                             WEBHOOK_URL,
-                            f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
-                            f"_Para confirmar, cancelar ou corrigir: mencione *@Mia Falaw Bot* no chat._"
+                            f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
                         )
             except Exception as exc:
                 logger.exception("[ANALISAR-BG] Erro: %s", exc)

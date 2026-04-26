@@ -648,7 +648,7 @@ async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
         )
     except Exception as e:
         logger.exception("Erro ao salvar sessão: %s", e)
-        return f"Ops, {primeiro}! Tive um probleminha ao salvar na planilha. Pode tentar confirmar novamente? 🙏", False
+        return f"Ops, {primeiro}! Tive um probleminha ao salvar na planilha. Erro: `{type(e).__name__}: {str(e)[:150]}`\n\nPode tentar confirmar novamente? 🙏", False
 
 
 async def cancelar_sessao(advogado: str, webhook_url: str):

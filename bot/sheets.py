@@ -8,7 +8,6 @@ import logging
 import os
 
 import gspread
-from google.oauth2.service_account import Credentials
 
 from bot.config import SPREADSHEET_ID, COLUNAS
 
@@ -24,11 +23,10 @@ def _client():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if sa_json:
         info = json.loads(sa_json)
-        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        return gspread.service_account_from_dict(info, scopes=SCOPES)
     else:
         sa_file = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "/secrets/service-account.json")
-        creds = Credentials.from_service_account_file(sa_file, scopes=SCOPES)
-    return gspread.authorize(creds)
+        return gspread.service_account(filename=sa_file, scopes=SCOPES)
 
 
 def _aba_precedentes(sh):
@@ -113,7 +111,7 @@ def _salvar_sessoes_sync(sessoes: dict):
 
         ws.clear()
         if rows:
-            ws.update(rows, value_input_option="RAW")
+            ws.update("A1", rows)
         logger.info("Sessões salvas no Sheets: %d", len(sessoes))
     except Exception as e:
         logger.warning("Erro ao salvar sessões no Sheets: %s", e)
