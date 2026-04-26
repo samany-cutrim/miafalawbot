@@ -772,7 +772,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                             "text": "✅ Metadados salvos! Use o botão *Incluir via Formulário* para enviar o texto da decisão.",
                             "cardsV2": [_card_with_buttons(
                                 "📎 Envie o PDF da decisão",
-                                "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\nArraste o arquivo .pdf diretamente aqui no chat.\n\n📝 Se o PDF não funcionar, use o Formulário para incluir o texto da decisão.",
+                                "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\n📝 Use o Formulário para enviar o texto da decisão.",
                                 [
                                     _primary_button("❌ Cancelar", "cancelar_pdf"),
                                     {
