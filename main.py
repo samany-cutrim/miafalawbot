@@ -454,13 +454,21 @@ def _decision_dialog_body() -> dict:
                     },
                     {
                         "textParagraph": {
-                            "text": "📎 <b>Próximo passo:</b> Após confirmar, envie o PDF da decisão diretamente no chat."
+                            "text": "📎 <b>Próximo passo:</b> Após confirmar, envie o PDF da decisão diretamente no chat.\n\n📝 <b>Alternativa:</b> Se o PDF não funcionar, use o botão <b>Incluir via Formulário</b> abaixo."
                         }
                     },
                     {
                         "buttonList": {
                             "buttons": [
-                                _primary_button("✅ Confirmar e enviar PDF", "submit_decision_dialog")
+                                _primary_button("✅ Confirmar e enviar PDF", "submit_decision_dialog"),
+                                {
+                                    "text": "📝 Incluir via Formulário",
+                                    "onClick": {
+                                        "openLink": {
+                                            "url": "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform?usp=dialog"
+                                        }
+                                    }
+                                }
                             ]
                         }
                     },
@@ -587,15 +595,39 @@ async def _handle_message(event: dict) -> dict:
                 logger.info("[PDF] userOAuthToken presente: %s", bool(user_oauth_token))
 
                 if not user_oauth_token:
-                    logger.warning("[PDF] userOAuthToken ausente — orientando uso do dialog")
-                    return _message_text_response(
-                        "📋 *Como enviar uma decisão para análise:*\n\n"
-                        "1️⃣ Clique no botão *Enviar decisão* no menu\n"
-                        "2️⃣ Cole o texto da decisão no campo indicado\n"
-                        "3️⃣ Selecione o tipo de responsabilidade\n"
-                        "4️⃣ Clique em *Enviar decisão*\n\n"
-                        "⚠️ O envio de PDF diretamente no chat não é suportado nesta versão."
-                    )
+                    # Token ausente: retorna requesting_google_scopes para forçar
+                    # tela de autorização OAuth do Add-on.
+                    # O Google Chat re-executa o evento automaticamente após autorização.
+                    logger.warning("[PDF] userOAuthToken ausente — exibindo card com Forms")
+                    return {
+                        "hostAppDataAction": {
+                            "chatDataAction": {
+                                "createMessageAction": {
+                                    "message": {
+                                        "text": "⚠️ Não foi possível ler o PDF automaticamente.",
+                                        "cardsV2": [{
+                                            "cardId": "pdf_fallback",
+                                            "card": {
+                                                "header": {"title": "Mia Falaw Bot", "subtitle": "Use o formulário para enviar a decisão"},
+                                                "sections": [{
+                                                    "widgets": [
+                                                        {"textParagraph": {"text": "Abra o formulário, cole o texto da decisão e envie. A análise será processada automaticamente."}},
+                                                        {"buttonList": {"buttons": [
+                                                            {
+                                                                "text": "📝 Abrir Formulário",
+                                                                "onClick": {"openLink": {"url": "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform?usp=dialog"}}
+                                                            },
+                                                            _primary_button("◀ Menu", "open_home")
+                                                        ]}}
+                                                    ]
+                                                }]
+                                            }
+                                        }]
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                 logger.info("[PDF] Baixando com userOAuthToken: %s", _download_url[:100])
                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
@@ -734,8 +766,18 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                             "text": "✅ Metadados salvos! Agora *envie o PDF* da decisão aqui no chat (arraste o arquivo .pdf para esta conversa).",
                             "cardsV2": [_card_with_buttons(
                                 "📎 Envie o PDF da decisão",
-                                "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\nArraste o arquivo .pdf diretamente aqui no chat.",
-                                [_primary_button("❌ Cancelar", "cancelar_pdf")],
+                                "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\nArraste o arquivo .pdf diretamente aqui no chat.\n\n📝 Se o PDF não funcionar, use o Formulário para incluir o texto da decisão.",
+                                [
+                                    _primary_button("❌ Cancelar", "cancelar_pdf"),
+                                    {
+                                        "text": "📝 Incluir via Formulário",
+                                        "onClick": {
+                                            "openLink": {
+                                                "url": "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform?usp=dialog"
+                                            }
+                                        }
+                                    }
+                                ],
                                 "aguardando_pdf"
                             )]
                         }
