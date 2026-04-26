@@ -132,3 +132,59 @@ async def carregar_sessoes() -> dict:
 async def salvar_sessoes(sessoes: dict):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _salvar_sessoes_sync, sessoes)
+
+
+# ---------------------------------------------------------------------------
+# OAUTH TOKENS — refresh tokens dos usuários para postar cards interativos
+# ---------------------------------------------------------------------------
+
+TOKENS_ABA = "_oauth_tokens"
+
+
+def _salvar_token_sync(chave: str, refresh_token: str):
+    """Salva/atualiza o refresh_token do usuário (chave = primeiro nome em lower)."""
+    try:
+        sh = _client().open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(TOKENS_ABA)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title=TOKENS_ABA, rows=50, cols=3)
+            ws.update("A1", [["chave", "refresh_token"]])
+
+        dados = ws.get_all_values()
+        for i, row in enumerate(dados[1:], 2):
+            if row and row[0] == chave:
+                ws.update(f"A{i}", [[chave, refresh_token]])
+                logger.info("Token OAuth atualizado para %s", chave)
+                return
+        ws.append_row([chave, refresh_token])
+        logger.info("Token OAuth salvo para %s", chave)
+    except Exception as e:
+        logger.error("Erro ao salvar token OAuth: %s", e)
+
+
+def _carregar_token_sync(chave: str) -> str | None:
+    """Retorna o refresh_token do usuário ou None se não autorizado."""
+    try:
+        sh = _client().open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(TOKENS_ABA)
+        dados = ws.get_all_values()
+        for row in dados[1:]:
+            if row and row[0] == chave:
+                return row[1] if len(row) > 1 and row[1] else None
+        return None
+    except gspread.WorksheetNotFound:
+        return None
+    except Exception as e:
+        logger.warning("Erro ao carregar token OAuth: %s", e)
+        return None
+
+
+async def salvar_token_oauth(chave: str, refresh_token: str):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _salvar_token_sync, chave, refresh_token)
+
+
+async def carregar_token_oauth(chave: str) -> str | None:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _carregar_token_sync, chave)

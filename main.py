@@ -80,6 +80,8 @@ from bot.handlers import (
     salvar_sessoes,
 )
 from bot.webhook import send_webhook, send_card, send_card_with_user_token
+from bot.oauth import get_auth_url, exchange_code, refresh_access_token, get_user_info
+from bot.sheets import salvar_token_oauth, carregar_token_oauth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -556,23 +558,19 @@ async def _processar_pdf_background(
 ):
     """
     Executado em background após resposta imediata ao Google Chat.
-    Download do PDF → extração de texto → análise IA → envia resultado via webhook.
+    Download do PDF → extração de texto → análise IA → envia card interativo.
+    Se o usuário já autorizou via /auth, usa o refresh_token salvo.
+    Caso contrário, fallback para webhook texto.
     """
     try:
         pdf_bytes = await _download_pdf_chat(resource_name)
         if not pdf_bytes:
-            await send_webhook(
-                webhook_url,
-                "⚠️ Não foi possível baixar o PDF. Tente enviar novamente."
-            )
+            await send_webhook(webhook_url, "⚠️ Não foi possível baixar o PDF. Tente enviar novamente.")
             return
 
         texto_pdf = extrair_texto_pdf(pdf_bytes)
         if not texto_pdf or len(texto_pdf.strip()) < 50:
-            await send_webhook(
-                webhook_url,
-                "⚠️ Não foi possível extrair texto do PDF. O arquivo pode estar escaneado."
-            )
+            await send_webhook(webhook_url, "⚠️ Não foi possível extrair texto do PDF. O arquivo pode estar escaneado.")
             return
 
         resultado = await processar_texto_chat(
@@ -583,12 +581,31 @@ async def _processar_pdf_background(
         )
 
         primeiro = advogado.strip().split()[0]
-        if webhook_url:
-            await send_webhook(
-                webhook_url,
-                f"✅ *Análise concluída, {primeiro}!*\n"
-                f"_Mencione *@Mia Falaw Bot* no chat para ver o card completo e confirmar a decisão._"
-            )
+
+        # Tenta enviar card interativo via token OAuth do usuário
+        chave = advogado.strip().lower().split()[0]
+        refresh_token = await carregar_token_oauth(chave)
+        enviado = False
+        if refresh_token and space_name:
+            access_token = await refresh_access_token(refresh_token)
+            if access_token:
+                card = _analysis_actions_card(resultado)
+                enviado = await send_card_with_user_token(
+                    space_name=space_name,
+                    card=card,
+                    oauth_token=access_token,
+                )
+
+        if not enviado:
+            if webhook_url:
+                auth_link = f"https://mia-falaw-bot.onrender.com/auth?advogado={primeiro}"
+                await send_webhook(
+                    webhook_url,
+                    f"✅ *Análise concluída, {primeiro}!*\n\n"
+                    f"_Para receber o card com botões de confirmação diretamente, autorize o bot uma vez:_\n"
+                    f"{auth_link}"
+                )
+            logger.warning("[BG] Token OAuth não disponível para %s — enviando link de autorização", advogado)
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
@@ -1233,6 +1250,49 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "mia-falaw-bot-v25"}
+
+
+# ---------------------------------------------------------------------------
+# OAUTH — autorização para postar cards interativos
+# ---------------------------------------------------------------------------
+
+@app.get("/auth")
+async def auth_start(advogado: str = ""):
+    """Redireciona para o Google OAuth. Inclua ?advogado=SeuNome no link."""
+    from fastapi.responses import RedirectResponse
+    url = get_auth_url(state=advogado)
+    return RedirectResponse(url)
+
+
+@app.get("/auth/callback")
+async def auth_callback(code: str = "", state: str = "", error: str = ""):
+    """Google redireciona aqui após autorização."""
+    from fastapi.responses import HTMLResponse
+    if error:
+        return HTMLResponse(f"<h2>❌ Autorização negada: {error}</h2>", status_code=400)
+    if not code:
+        return HTMLResponse("<h2>❌ Código ausente.</h2>", status_code=400)
+    try:
+        tokens = await exchange_code(code)
+        refresh_token = tokens.get("refresh_token", "")
+        access_token  = tokens.get("access_token", "")
+        if not refresh_token:
+            return HTMLResponse("<h2>❌ refresh_token não recebido. Tente novamente.</h2>", status_code=500)
+        # Identifica o usuário
+        user_info = await get_user_info(access_token)
+        email = user_info.get("email", state or "desconhecido")
+        nome  = user_info.get("name",  state or email)
+        chave = nome.strip().lower().split()[0] if nome else email.split("@")[0]
+        await salvar_token_oauth(chave, refresh_token)
+        logger.info("[OAuth] Token salvo para %s (chave=%s)", nome, chave)
+        return HTMLResponse(
+            f"<h2>✅ Autorização concluída!</h2>"
+            f"<p>Olá, <b>{nome}</b>! O bot agora pode enviar cards interativos diretamente para você.</p>"
+            f"<p>Pode fechar esta aba.</p>"
+        )
+    except Exception as exc:
+        logger.exception("[OAuth] Erro no callback: %s", exc)
+        return HTMLResponse(f"<h2>❌ Erro: {exc}</h2>", status_code=500)
 
 
 @app.get("/debug-models")
