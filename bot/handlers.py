@@ -173,21 +173,29 @@ def extrair_trt_do_processo(numero: str) -> str:
 # Limite de input: ~8000 tokens ≈ 24000 chars
 # Preferências de modelos: Claude primeiro, Gemini segundo, Llama como último recurso e GPT por último.
 _GITHUB_MODELS_FALLBACK = [
+    # Claude (Anthropic) — mais rápidos primeiro
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-sonnet-4",
-    "claude-haiku-4-5",
-    "claude-3-7-sonnet",
-    "claude-3-5-sonnet",
     "claude-3-5-haiku",
-    "gemini-2.5-pro",
+    "claude-3-5-sonnet",
+    "claude-3-7-sonnet",
+    # GPT rápidos
+    "gpt-4.1-mini",
+    "gpt-4o-mini",
+    "gpt-5-mini",
+    # Gemini
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "Meta-Llama-3.1-405B-Instruct",
-    "Meta-Llama-3.1-70B-Instruct",
-    "Meta-Llama-3.1-8B-Instruct",
+    # Llama
     "Llama-3.3-70B-Instruct",
+    "Meta-Llama-3.1-70B-Instruct",
+    "Meta-Llama-3.1-405B-Instruct",
+    # GPT pesados (mais lentos, último recurso)
+    "gpt-4.1",
     "gpt-4o",
-    "gpt-4o-mini",
+    "gpt-5",
 ]
 _GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
 
@@ -335,9 +343,15 @@ async def _chamar_ia(prompt: str) -> str:
                 _last_success_model = model_name
                 return response.choices[0].message.content or ""
             except Exception as e:
+                err_str = str(e)
                 if _is_unknown_model_error(e):
                     _invalid_models.add(model_name)
-                logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
+                # 429 rate limit — troca de modelo imediatamente sem esperar retry
+                if "429" in err_str or "rate_limit" in err_str.lower() or "too many requests" in err_str.lower():
+                    logger.warning("[PDF] Modelo %s com rate limit (429) — trocando imediatamente.", model_name)
+                    _invalid_models.add(model_name)
+                else:
+                    logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
     raise RuntimeError(
         "Nenhuma IA disponível no endpoint com modelos de chat/completion. "
