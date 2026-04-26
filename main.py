@@ -129,6 +129,10 @@ def _primary_button(label: str, function_name: str, parameters: list | None = No
     return {"text": label, "onClick": {"action": action}}
 
 
+def _link_button(label: str, url: str) -> dict:
+    return {"text": label, "onClick": {"openLink": {"url": url}}}
+
+
 def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: str) -> dict:
     widgets: list[dict] = [{"textParagraph": {"text": _as_html(text)}}]
     if buttons:
@@ -217,27 +221,41 @@ def _dialog_action_response(dialog_body: dict) -> dict:
 # CARDS DE UI
 # ---------------------------------------------------------------------------
 
-def _home_card() -> dict:
+async def _home_card(advogado: str = "") -> dict:
+    buttons = [
+        _primary_button("📎 Enviar decisão", "open_decision_dialog", open_dialog=True),
+        _primary_button("🔍 Buscar precedentes", "open_busca_card"),
+        _primary_button("❓ Ajuda", "open_ajuda"),
+    ]
+    extra_section = None
+    if advogado:
+        chave = advogado.strip().lower().split()[0]
+        token = await carregar_token_oauth(chave)
+        if not token:
+            auth_url = f"https://mia-falaw-bot.onrender.com/auth?advogado={advogado}"
+            extra_section = {
+                "header": "⚠️ Ação necessária — ativação",
+                "widgets": [{
+                    "textParagraph": {"text": "Para receber os cards interativos diretamente no chat (sem precisar mencionar @), clique no botão abaixo <b>uma única vez</b>:"}
+                }, {
+                    "buttonList": {"buttons": [
+                        _link_button("🔓 Ativar cards interativos", auth_url)
+                    ]}
+                }]
+            }
+    sections: list[dict] = [{
+        "widgets": [
+            {"textParagraph": {"text": "Selecione uma opção abaixo:"}},
+            {"buttonList": {"buttons": buttons}},
+        ]
+    }]
+    if extra_section:
+        sections.append(extra_section)
     return {
         "cardId": "home",
         "card": {
             "header": _base_header("Análise de decisões trabalhistas"),
-            "sections": [
-                {
-                    "widgets": [
-                        {"textParagraph": {"text": "Selecione uma opção abaixo:"}},
-                        {
-                            "buttonList": {
-                                "buttons": [
-                                    _primary_button("📎 Enviar decisão", "open_decision_dialog", open_dialog=True),
-                                    _primary_button("🔍 Buscar precedentes", "open_busca_card"),
-                                    _primary_button("❓ Ajuda", "open_ajuda"),
-                                ]
-                            }
-                        },
-                    ]
-                }
-            ],
+            "sections": sections,
         },
     }
 
@@ -832,7 +850,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         return _new_message_text(msg)
 
     # Qualquer outra mensagem → saudação personalizada + home card
-    return _message_text_and_cards(_saudacao_personalizada(advogado), [_home_card()])
+    return _message_text_and_cards(_saudacao_personalizada(advogado), [await _home_card(advogado)])
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +861,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
     logger.info("[CARD_CLICK] user=%s function=%s", advogado, function_name)
 
     if function_name == "open_home":
-        return _update_message_cards([_home_card()])
+        return _update_message_cards([await _home_card(advogado)])
 
     if function_name == "open_ajuda":
         return _update_message_cards([_ajuda_card()])
@@ -908,7 +926,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
         if chave in sessoes:
             del sessoes[chave]
             await salvar_sessoes(sessoes)
-        return _update_message_cards([_home_card()])
+        return _update_message_cards([await _home_card(advogado)])
 
     if function_name == "confirm_decision":
         mensagem, oferecer_email = await confirmar_sessao_data(advogado)
@@ -965,7 +983,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
         ])
 
     logger.warning("[CARD_CLICK] function não reconhecida: %s", function_name)
-    return _update_message_cards([_home_card()])
+    return _update_message_cards([await _home_card(advogado)])
 
 
 # ---------------------------------------------------------------------------
@@ -1075,14 +1093,14 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
             return JSONResponse(result)
         except Exception as exc:
             logger.exception("[/chat] erro MESSAGE: %s", exc)
-            return JSONResponse(_message_text_and_cards("Erro interno.", [_home_card()]))
+            return JSONResponse(_message_text_and_cards("Erro interno.", [await _home_card(advogado)]))
 
     # ------------------------------------------------------------------
     # 4. APP_ADDED
     # ------------------------------------------------------------------
     if chat_data.get("addedToSpacePayload") or event.get("type") == "ADDED_TO_SPACE":
         logger.info("[/chat] APP_ADDED user=%s", advogado)
-        return JSONResponse(_message_text_and_cards("Olá! Selecione uma opção:", [_home_card()]))
+        return JSONResponse(_message_text_and_cards("Olá! Selecione uma opção:", [await _home_card(advogado)]))
 
     # ------------------------------------------------------------------
     # 5. REMOVED_FROM_SPACE
@@ -1096,7 +1114,7 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
     # ------------------------------------------------------------------
     logger.warning("[/chat] evento não tratado keys=%s chat_keys=%s",
                    list(event.keys()), list(chat_data.keys()))
-    return JSONResponse(_message_text_and_cards("Menu principal:", [_home_card()]))
+    return JSONResponse(_message_text_and_cards("Menu principal:", [await _home_card(advogado)]))
 
 
 # ---------------------------------------------------------------------------
