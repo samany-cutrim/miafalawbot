@@ -709,37 +709,43 @@ async def obter_relatorio_pendente(advogado: str) -> str | None:
     row = sessoes.get(chave)
     if not row:
         return None
-    # Ignora sessões que ainda estão em outro estado
     if row.get("_aguardando_correcao"):
         return None
-    # Precisa ter pelo menos número de processo para ser uma análise real
     if not row.get("NÚMERO DO PROCESSO") and not row.get("numero_processo"):
         return None
     sigla = resolver_sigla(advogado)
-    # Reconstrói o objeto analise a partir da row salva
+
+    # Prefere a análise completa salva diretamente (garante todos os campos)
+    analise = row.get("_analise_raw")
+    if analise:
+        return formatar_relatorio(analise, sigla)
+
+    # Fallback para sessões antigas: reconstrói com as chaves corretas da planilha
     analise = {
-        "trt":                          row.get("TRT", "N/A"),
-        "numero_processo":               row.get("NÚMERO DO PROCESSO", "N/A"),
-        "nome_reclamante":               row.get("RECLAMANTE", "N/A"),
-        "data_decisao":                  row.get("DATA", "N/A"),
-        "tipo_decisao":                  row.get("TIPO", "N/A"),
-        "resultado_geral":               row.get("RESULTADO", "N/A"),
-        "cliente_detectado":             row.get("CLIENTE", "N/A"),
-        "tipo_responsabilidade_detectado": row.get("TIPO RESPONSABILIDADE", "N/A"),
-        "juiz_relator":                  row.get("JUIZ/RELATOR", "N/A"),
-        "vara_turma":                    row.get("VARA/TURMA", "N/A"),
-        "pedidos_deferidos":             row.get("PEDIDOS DEFERIDOS", []),
-        "pedidos_indeferidos":           row.get("PEDIDOS INDEFERIDOS", []),
-        "entendimentos_favoraveis":      row.get("ENTENDIMENTOS FAVORÁVEIS", []),
-        "entendimentos_desfavoraveis":   row.get("ENTENDIMENTOS DESFAVORÁVEIS", []),
-        "fundamentos_juridicos":         row.get("FUNDAMENTOS", "N/A"),
-        "valor_condenacao":              row.get("VALOR CONDENAÇÃO", "N/A"),
-        "deposito_recursal":             row.get("DEPÓSITO RECURSAL", "N/A"),
-        "prazo_recursal":                row.get("PRAZO RECURSAL", "N/A"),
-        "resumo_geral":                  row.get("RESUMO", "N/A"),
-        "nivel_risco":                   row.get("NÍVEL RISCO", "N/A"),
-        "recomendacao":                  row.get("RECOMENDAÇÃO", "N/A"),
-        "observacoes_precedente":        row.get("OBSERVAÇÕES", "N/A"),
+        "trt":                             row.get("TRT", "N/A"),
+        "numero_processo":                  row.get("NÚMERO DO PROCESSO", "N/A"),
+        "nome_reclamante":                  row.get("NOME DO RECLAMANTE", "N/A"),
+        "data_decisao":                     row.get("DATA DA DECISÃO", "N/A"),
+        "tipo_decisao":                     row.get("TIPO DE DECISÃO", "N/A"),
+        "resultado_geral":                  row.get("RESULTADO DA DECISÃO", "N/A"),
+        "cliente_detectado":                row.get("CLIENTE", "N/A"),
+        "tipo_responsabilidade_detectado":  row.get("TIPO DE RESPONSABILIDADE", "N/A"),
+        "juiz_relator":                     row.get("JUIZ/RELATOR", "N/A"),
+        "vara_turma":                       row.get("VARA/TURMA", "N/A"),
+        "pedidos_deferidos":                row.get("pedidos_deferidos", []),
+        "pedidos_indeferidos":              row.get("pedidos_indeferidos", []),
+        "entendimentos_favoraveis":         row.get("ENTENDIMENTOS FAVORÁVEIS", []),
+        "entendimentos_desfavoraveis":      row.get("ENTENDIMENTOS DESFAVORÁVEIS", []),
+        "fundamentos_juridicos":            row.get("FUNDAMENTOS JURÍDICOS", "N/A"),
+        "valor_condenacao":                 row.get("VALOR DA CONDENAÇÃO", "N/A"),
+        "deposito_recursal":                row.get("deposito_recursal", "N/A"),
+        "prazo_recursal":                   row.get("prazo_recursal", "N/A"),
+        "resumo_geral":                     row.get("RESUMO", "N/A"),
+        "nivel_risco":                      row.get("nivel_risco", "N/A"),
+        "recomendacao":                     row.get("recomendacao", "N/A"),
+        "observacoes_precedente":           row.get("OBSERVAÇÕES", "N/A"),
+        "_cliente_final":                   row.get("_cliente_final") or row.get("CLIENTE", "N/A"),
+        "_tipo_final":                      row.get("_tipo_final") or row.get("TIPO DE RESPONSABILIDADE", "N/A"),
     }
     return formatar_relatorio(analise, sigla)
 
@@ -987,6 +993,7 @@ async def corrigir_sessao_data(advogado: str, instrucao: str) -> tuple[bool, str
         row_corrigido["_cliente_hint"] = hints["cliente"]
         row_corrigido["_tipo_hint"]    = hints["tipo"]
         row_corrigido["_aguardando_correcao"] = False
+        row_corrigido["_analise_raw"]  = analise_corrigida
         sessoes[chave] = row_corrigido
         await salvar_sessoes(sessoes)
 
@@ -1034,6 +1041,7 @@ async def _analisar_e_aguardar(
     row["_cliente_hint"] = hints["cliente"]
     row["_tipo_hint"]    = hints["tipo"]
     row["_aguardando_correcao"] = False
+    row["_analise_raw"]  = analise  # análise completa para reconstruir relatório fiel
     chave = _chave_sessao(advogado)
     sessoes = await carregar_sessoes()
     sessoes[chave] = row

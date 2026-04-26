@@ -61,13 +61,20 @@ async def send_card_with_user_token(space_name: str, card: dict, oauth_token: st
         return False
 
 
+async def send_card_with_service_account(
+    space_name: str,
+    card: dict,
+    sa_file: str,
+    thread_name: str = "",
+) -> bool:
     """
     Posta um card interativo (com botões funcionais) via Google Chat REST API
     usando Service Account. Retorna True se enviado com sucesso.
 
     space_name: ex 'spaces/AAQAZKvRf_I'
-    card: dict no formato cardsV2 (sem _fallback_text)
+    card: dict no formato cardsV2
     sa_file: caminho para o arquivo JSON da Service Account
+    thread_name: se informado, posta na mesma thread (ex: 'spaces/AAA/threads/BBB')
     """
     try:
         from google.oauth2 import service_account
@@ -81,7 +88,9 @@ async def send_card_with_user_token(space_name: str, card: dict, oauth_token: st
         token = creds.token
 
         url = f"https://chat.googleapis.com/v1/{space_name}/messages"
-        payload = {"cardsV2": [card]}
+        payload: dict = {"cardsV2": [card]}
+        if thread_name:
+            payload["thread"] = {"name": thread_name}
 
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(
@@ -100,4 +109,3 @@ async def send_card_with_user_token(space_name: str, card: dict, oauth_token: st
     except Exception as e:
         logger.exception("[ChatAPI] Erro ao enviar card interativo: %s", e)
         return False
-
