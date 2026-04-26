@@ -53,20 +53,24 @@ function onMessage(e) {
 
 
 /**
- * Baixa o PDF anexado usando o token OAuth do usuário (ScriptApp.getOAuthToken),
- * extrai o texto via pdfplumber no Render e retorna o resultado da análise.
+ * Processa PDF anexado no Chat usando apenas recursos do Apps Script:
+ * 1. Salva o PDF no Drive temporariamente via UrlFetchApp + token OAuth do usuário
+ * 2. Extrai o texto via Drive API (converte para Doc) — já funciona sem Chat App
+ * 3. Envia o texto extraído para /processar-texto-sync no Render
+ * 4. Apaga o arquivo temporário do Drive
  *
- * Esta abordagem contorna a limitação da Service Account externa que não pode
- * chamar chat.googleapis.com/v1/media sem ser um Chat App nativo registrado.
+ * Esta abordagem elimina completamente a dependência da Chat Media API,
+ * que exige um Chat App nativo registrado no GCP (bloqueado no nosso cenário).
  */
 function _processarPdfNoAppsScript(e, pdfAttachment) {
-  try {
-    var userName = (e.user && e.user.displayName) ? e.user.displayName : "Advogado";
+  var userName = (e.user && e.user.displayName) ? e.user.displayName : "Advogado";
+  var tempFileId = null;
 
-    // 1. Obtém token OAuth do usuário logado no Add-on
+  try {
+    // 1. Obtém token OAuth do usuário (tem permissão chat.messages.readonly)
     var token = ScriptApp.getOAuthToken();
 
-    // 2. Monta URL de download usando o resourceName do attachmentDataRef
+    // 2. Monta URL de download via Chat Media API com token do usuário
     var dataRef = pdfAttachment.attachmentDataRef || {};
     var resourceName = dataRef.resourceName || "";
 
@@ -75,45 +79,48 @@ function _processarPdfNoAppsScript(e, pdfAttachment) {
     }
 
     var downloadUrl = "https://chat.googleapis.com/v1/media/" + resourceName + "?alt=media";
+    Logger.log("[PDF] Baixando: " + downloadUrl.substring(0, 100));
 
-    // 3. Baixa o PDF como bytes usando o token OAuth do usuário
     var resp = UrlFetchApp.fetch(downloadUrl, {
       headers: { "Authorization": "Bearer " + token },
       muteHttpExceptions: true
     });
 
+    Logger.log("[PDF] Status download: " + resp.getResponseCode());
+
     if (resp.getResponseCode() !== 200) {
-      Logger.log("Erro download PDF: " + resp.getResponseCode() + " " + resp.getContentText().substring(0, 300));
-      return { text: "⚠️ Não consegui baixar o PDF (HTTP " + resp.getResponseCode() + "). Tente reenviar." };
+      Logger.log("[PDF] Erro download: " + resp.getContentText().substring(0, 300));
+      return { text: "⚠️ Não consegui baixar o PDF (HTTP " + resp.getResponseCode() + "). Tente reenviar o arquivo." };
     }
 
-    var pdfBytes = resp.getContent(); // array de bytes
-    var pdfBase64 = Utilities.base64Encode(pdfBytes);
+    // 3. Salva no Drive temporariamente para extrair texto
+    var pdfBlob = resp.getBlob().setName("temp_decisao_" + Date.now() + ".pdf");
+    var tempFile = DriveApp.createFile(pdfBlob);
+    tempFileId = tempFile.getId();
+    Logger.log("[PDF] Salvo no Drive temporariamente: " + tempFileId);
 
-    // 4. Envia base64 para o Render extrair o texto e analisar
-    var renderResp = UrlFetchApp.fetch(RENDER_URL + "/processar-pdf-base64", {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify({
-        pdf_base64: pdfBase64,
-        advogado: userName,
-        filename: pdfAttachment.contentName || "decisao.pdf"
-      }),
-      muteHttpExceptions: true
+    // 4. Extrai texto convertendo PDF → Google Doc via Drive API
+    var texto = extrairTextoDoPdf(tempFileId);
+    Logger.log("[PDF] Texto extraído: " + (texto ? texto.length + " chars" : "nulo"));
+
+    if (!texto || texto.trim().length < 50) {
+      return { text: "⚠️ Não consegui extrair texto do PDF. O arquivo pode estar escaneado ou corrompido." };
+    }
+
+    // 5. Envia texto para o Render analisar (mesmo endpoint que já funciona)
+    var resp2 = chamarRenderSync("/processar-texto-sync", {
+      texto_pdf: texto,
+      advogado: userName,
+      texto: ""
     });
 
-    if (renderResp.getResponseCode() !== 200) {
-      Logger.log("Erro Render PDF: " + renderResp.getResponseCode() + " " + renderResp.getContentText().substring(0, 300));
-      return { text: "⚠️ Erro ao processar o PDF no servidor. Tente novamente." };
+    if (!resp2 || resp2.status !== "ok" || !resp2.resultado) {
+      Logger.log("[PDF] Erro Render: " + JSON.stringify(resp2));
+      return { text: "⚠️ Erro ao processar a análise. Tente novamente." };
     }
 
-    var resultado = JSON.parse(renderResp.getContentText());
-    if (!resultado || resultado.status !== "ok") {
-      return { text: "⚠️ Erro na análise: " + (resultado.erro || "resposta inválida") };
-    }
-
-    // 5. Retorna o resultado formatado como card
-    var textoHtml = String(resultado.resultado || "")
+    // 6. Retorna resultado como card
+    var textoHtml = String(resp2.resultado || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -125,9 +132,20 @@ function _processarPdfNoAppsScript(e, pdfAttachment) {
         cardId: "analise_resultado",
         card: {
           header: getBaseCardHeader("✅ Análise concluída"),
-          sections: [{
-            widgets: [{ textParagraph: { text: textoHtml } }]
-          }]
+          sections: [
+            { widgets: [{ textParagraph: { text: textoHtml } }] },
+            {
+              widgets: [{
+                buttonList: {
+                  buttons: [
+                    { text: "✅ Confirmar", onClick: { action: { "function": "confirm_decision" } } },
+                    { text: "✏️ Corrigir", onClick: { action: { "function": "open_correction_dialog" } } },
+                    { text: "❌ Cancelar", onClick: { action: { "function": "cancel_decision" } } }
+                  ]
+                }
+              }]
+            }
+          ]
         }
       }]
     };
@@ -135,6 +153,11 @@ function _processarPdfNoAppsScript(e, pdfAttachment) {
   } catch (err) {
     Logger.log("Erro _processarPdfNoAppsScript: " + err);
     return { text: "⚠️ Erro interno ao processar o PDF: " + err.message };
+  } finally {
+    // 7. Apaga arquivo temporário do Drive sempre, mesmo em caso de erro
+    if (tempFileId) {
+      try { DriveApp.getFileById(tempFileId).setTrashed(true); } catch(e) {}
+    }
   }
 }
 
@@ -1118,10 +1141,9 @@ function keepAlive() {
 // ---------------------------------------------------------------------------
 
 function instalarTriggers() {
+  // Trigger de formulário removido — o bot recebe PDFs diretamente no Chat
   ScriptApp.getProjectTriggers().forEach(function(t) { ScriptApp.deleteTrigger(t); });
 
-  var form = FormApp.openById(FORM_ID);
-  ScriptApp.newTrigger("onFormSubmit").forForm(form).onFormSubmit().create();
   ScriptApp.newTrigger("verificarComandos").timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger("keepAlive").timeBased().everyMinutes(10).create();
 
