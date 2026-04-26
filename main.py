@@ -367,16 +367,39 @@ def _analysis_webhook_card(advogado: str, analysis_text: str) -> dict:
 
 
 def _analysis_actions_card(analysis_text: str) -> dict:
-    return _card_with_buttons(
-        "Análise concluída — aguardando confirmação",
-        analysis_text,
-        [
-            _primary_button("✅ Confirmar", "confirm_decision"),
-            _primary_button("❌ Cancelar", "cancel_decision"),
-            _primary_button("✏️ Corrigir", "request_correction"),
-        ],
-        "analysis_actions",
-    )
+    return {
+        "cardId": "analysis_actions",
+        "card": {
+            "header": {
+                "title": "Mia Falaw Bot",
+                "subtitle": "✅ Análise concluída — aguardando confirmação",
+            },
+            "sections": [
+                {
+                    "header": "📋 Relatório da Decisão",
+                    "collapsible": True,
+                    "uncollapsibleWidgetsCount": 2,
+                    "widgets": [
+                        {"textParagraph": {"text": _as_html(analysis_text)}},
+                    ],
+                },
+                {
+                    "header": "O que deseja fazer?",
+                    "widgets": [
+                        {
+                            "buttonList": {
+                                "buttons": [
+                                    _primary_button("✅ Confirmar e salvar", "confirm_decision"),
+                                    _primary_button("✏️ Corrigir", "request_correction"),
+                                    _primary_button("❌ Cancelar", "cancel_decision"),
+                                ]
+                            }
+                        }
+                    ],
+                },
+            ],
+        },
+    }
 
 
 def _email_choice_card() -> dict:
@@ -678,10 +701,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         if relatorio_pendente:
             primeiro = advogado.strip().split()[0]
             logger.info("[MESSAGE] Sessão pendente detectada para %s — exibindo card de análise", advogado)
-            return _message_text_and_cards(
-                f"✅ Análise pronta, {primeiro}! Confira e confirme abaixo:\n\n{relatorio_pendente}",
-                [_analysis_actions_card(relatorio_pendente)],
-            )
+            return _new_message_cards([_analysis_actions_card(relatorio_pendente)])
 
     # Aguardando correção
     if await esta_aguardando_correcao(advogado):
@@ -691,7 +711,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         ok, msg = await corrigir_sessao_data(advogado, instrucao)
         if not ok:
             return _new_message_text(msg)
-        return _message_text_and_cards("Análise corrigida:", [_analysis_actions_card(msg)])
+        return _new_message_cards([_analysis_actions_card(msg)])
 
     # Aguardando PDF — verifica se há anexo PDF na mensagem
     if await _esta_aguardando_pdf(advogado):
