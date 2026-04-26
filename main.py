@@ -79,7 +79,7 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook, send_card, send_interactive_card
+from bot.webhook import send_webhook, send_card, send_interactive_card, send_card_with_user_token
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -584,19 +584,23 @@ async def _processar_pdf_background(
             tipo_responsabilidade=tipo,
         )
 
-        # Envia card interativo com botões via Chat REST API (Service Account)
+        # Tenta enviar card interativo via Chat REST API (Service Account)
+        # Funciona apenas se o app estiver configurado como Chat App no Google Cloud Console.
         primeiro = advogado.strip().split()[0]
         card = _analysis_actions_card(resultado)
         enviado = await send_interactive_card(
             space_name=space_name,
             card=card,
             sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
-            fallback_text=f"✅ Análise concluída, {primeiro}!\n\nMencione @Mia Falaw Bot para ver o resultado.",
+            fallback_text=resultado,
         )
         if not enviado and webhook_url:
+            # Fallback: envia a análise completa como texto para o usuário ler imediatamente.
+            # Os botões de confirmar/cancelar ficam disponíveis ao mencionar @Mia Falaw Bot.
             await send_webhook(
                 webhook_url,
-                f"✅ *Análise concluída, {primeiro}!*\n\nMencione *@Mia Falaw Bot* no chat para ver o resultado completo. 👉"
+                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
+                f"_Para confirmar, cancelar ou corrigir: mencione *@Mia Falaw Bot* no chat._"
             )
 
     except Exception as exc:
@@ -1172,6 +1176,65 @@ async def processar_texto_sync(request: Request):
 
     except Exception as exc:
         logger.exception("[TEXTO-SYNC] Erro: %s", exc)
+        return JSONResponse({"status": "error", "erro": str(exc)}, status_code=500)
+
+
+@app.post("/analisar-e-responder")
+async def analisar_e_responder(request: Request, background_tasks: BackgroundTasks):
+    """
+    Endpoint chamado pelo Apps Script após extrair texto do PDF.
+    Recebe texto + token OAuth do usuário, processa em background e
+    posta o card de análise diretamente no Chat usando o token do usuário
+    (que tem permissão no workspace do escritório).
+    """
+    try:
+        body = await request.json()
+        texto_pdf  = body.get("texto_pdf", "")
+        advogado   = body.get("advogado", "Advogado")
+        space_name = body.get("space_name", "")
+        thread_name = body.get("thread_name", "")
+        oauth_token = body.get("oauth_token", "")
+
+        if not texto_pdf or len(texto_pdf.strip()) < 50:
+            return JSONResponse({"status": "error", "erro": "Texto ausente ou muito curto"}, status_code=400)
+        if not space_name or not oauth_token:
+            return JSONResponse({"status": "error", "erro": "space_name e oauth_token são obrigatórios"}, status_code=400)
+
+        logger.info("[ANALISAR-BG] Iniciando para advogado=%s space=%s", advogado, space_name)
+
+        async def _background(texto_pdf, advogado, space_name, thread_name, oauth_token):
+            try:
+                cliente_hint, tipo_hint = await _get_hints_pdf(advogado)
+                resultado = await processar_texto_chat(
+                    texto_pdf=texto_pdf,
+                    advogado=advogado,
+                    cliente=cliente_hint,
+                    tipo_responsabilidade=tipo_hint or "OL",
+                )
+                card = _analysis_actions_card(resultado)
+                enviado = await send_card_with_user_token(
+                    space_name=space_name,
+                    card=card,
+                    oauth_token=oauth_token,
+                    thread_name=thread_name,
+                )
+                if not enviado:
+                    logger.error("[ANALISAR-BG] Falha ao enviar card para %s", advogado)
+                    if WEBHOOK_URL:
+                        primeiro = advogado.strip().split()[0]
+                        await send_webhook(
+                            WEBHOOK_URL,
+                            f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
+                            f"_Para confirmar, cancelar ou corrigir: mencione *@Mia Falaw Bot* no chat._"
+                        )
+            except Exception as exc:
+                logger.exception("[ANALISAR-BG] Erro: %s", exc)
+
+        background_tasks.add_task(_background, texto_pdf, advogado, space_name, thread_name, oauth_token)
+        return JSONResponse({"status": "ok", "message": "Análise iniciada em background"})
+
+    except Exception as exc:
+        logger.exception("[ANALISAR-BG] Erro ao receber requisição: %s", exc)
         return JSONResponse({"status": "error", "erro": str(exc)}, status_code=500)
 
 

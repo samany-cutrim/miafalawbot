@@ -169,33 +169,32 @@ def extrair_trt_do_processo(numero: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Modelos via GitHub Copilot (models.inference.ai.azure.com)
-# Ordem de preferência: Claude > Gemini > Llama > GPT.
-# Limite de input: ~8000 tokens ≈ 24000 chars
-# Preferências de modelos: Claude primeiro, Gemini segundo, Llama como último recurso e GPT por último.
+# Ordem de preferência: Claude > Gemini > GPT > Llama (último recurso — respostas genéricas).
 _GITHUB_MODELS_FALLBACK = [
-    # Claude (Anthropic) — mais rápidos primeiro
-    "claude-haiku-4-5",
+    # Claude (Anthropic) — melhor qualidade jurídica
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
-    "claude-sonnet-4",
-    "claude-3-5-haiku",
-    "claude-3-5-sonnet",
     "claude-3-7-sonnet",
-    # GPT rápidos
-    "gpt-4.1-mini",
-    "gpt-4o-mini",
-    "gpt-5-mini",
-    # Gemini
+    "claude-sonnet-4",
+    "claude-3-5-sonnet",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku",
+    # Gemini — segunda opção
+    "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    # Llama
-    "Llama-3.3-70B-Instruct",
-    "Meta-Llama-3.1-70B-Instruct",
-    "Meta-Llama-3.1-405B-Instruct",
-    # GPT pesados (mais lentos, último recurso)
+    # GPT — terceira opção
     "gpt-4.1",
     "gpt-4o",
     "gpt-5",
+    "gpt-4.1-mini",
+    "gpt-4o-mini",
+    "gpt-5-mini",
+    # Llama — ÚLTIMO RECURSO (respostas genéricas, evitar)
+    "Llama-3.3-70B-Instruct",
+    "Meta-Llama-3.1-405B-Instruct",
+    "Meta-Llama-3.1-70B-Instruct",
+    "Meta-Llama-3.1-8B-Instruct",
 ]
 _GITHUB_MAX_CHARS = 12000  # reduzido para caber no timeout de 30s do Google Chat
 
@@ -285,14 +284,15 @@ async def _resolver_modelos_github() -> list[str]:
                 ordenados.append(c)
         return ordenados
 
-    claude = _ordenar(claude, ["claude-sonnet-4-5", "claude-sonnet-4", "claude-haiku-4-5",
-                               "claude-3-7-sonnet", "claude-3-5-sonnet", "claude-3-5-haiku"])
+    claude = _ordenar(claude, ["claude-sonnet-4-6", "claude-sonnet-4-5", "claude-3-7-sonnet",
+                               "claude-sonnet-4", "claude-3-5-sonnet", "claude-haiku-4-5", "claude-3-5-haiku"])
     gemini = _ordenar(gemini, ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"])
-    llama  = _ordenar(llama,  ["Meta-Llama-3.1-405B-Instruct", "Llama-3.3-70B-Instruct",
+    gpt    = _ordenar(gpt, ["gpt-4.1", "gpt-4o", "gpt-5", "gpt-4.1-mini", "gpt-4o-mini", "gpt-5-mini"])
+    llama  = _ordenar(llama,  ["Llama-3.3-70B-Instruct", "Meta-Llama-3.1-405B-Instruct",
                                "Meta-Llama-3.1-70B-Instruct", "Meta-Llama-3.1-8B-Instruct"])
-    gpt    = _ordenar(gpt, ["gpt-4o", "gpt-4o-mini"])
 
-    _cached_model_order = claude + gemini + llama + gpt
+    # Claude → Gemini → GPT → Llama (último recurso)
+    _cached_model_order = claude + gemini + gpt + llama
     if not _cached_model_order:
         # Último recurso: qualquer modelo não-GPT disponível
         _cached_model_order = list(modelos_validos)

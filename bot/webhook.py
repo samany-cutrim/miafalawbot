@@ -26,7 +26,41 @@ async def send_card(webhook_url: str, card: dict):
         await send_webhook(webhook_url, fallback_text)
 
 
-async def send_interactive_card(space_name: str, card: dict, sa_file: str, fallback_text: str = "") -> bool:
+async def send_card_with_user_token(space_name: str, card: dict, oauth_token: str, thread_name: str = "") -> bool:
+    """
+    Posta um card interativo usando o token OAuth do usuário (Apps Script).
+    O token pertence ao contexto do workspace e tem permissão para postar no espaço.
+
+    space_name: ex 'spaces/AAQAZKvRf_I'
+    card: dict no formato cardsV2
+    oauth_token: token OAuth obtido via ScriptApp.getOAuthToken() no Apps Script
+    thread_name: se informado, posta na mesma thread (ex: 'spaces/AAA/threads/BBB')
+    """
+    try:
+        url = f"https://chat.googleapis.com/v1/{space_name}/messages"
+        payload: dict = {"cardsV2": [card]}
+        if thread_name:
+            payload["thread"] = {"name": thread_name}
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {oauth_token}"},
+            )
+
+        if r.status_code in (200, 201):
+            logger.info("[ChatAPI] Card enviado via user token para %s", space_name)
+            return True
+
+        logger.error("[ChatAPI] Falha user token [%s]: %s", r.status_code, r.text[:300])
+        return False
+
+    except Exception as e:
+        logger.exception("[ChatAPI] Erro ao enviar card via user token: %s", e)
+        return False
+
+
     """
     Posta um card interativo (com botões funcionais) via Google Chat REST API
     usando Service Account. Retorna True se enviado com sucesso.

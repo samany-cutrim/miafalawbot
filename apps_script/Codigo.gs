@@ -53,24 +53,25 @@ function onMessage(e) {
 
 
 /**
- * Processa PDF anexado no Chat usando apenas recursos do Apps Script:
- * 1. Salva o PDF no Drive temporariamente via UrlFetchApp + token OAuth do usuário
- * 2. Extrai o texto via Drive API (converte para Doc) — já funciona sem Chat App
- * 3. Envia o texto extraído para /processar-texto-sync no Render
- * 4. Apaga o arquivo temporário do Drive
- *
- * Esta abordagem elimina completamente a dependência da Chat Media API,
- * que exige um Chat App nativo registrado no GCP (bloqueado no nosso cenário).
+ * Processa PDF anexado no Chat:
+ * 1. Baixa o PDF com token OAuth do usuário (permissão no workspace)
+ * 2. Extrai texto via Drive API
+ * 3. Dispara /analisar-e-responder no Render de forma assíncrona, passando o token OAuth
+ * 4. Render processa em background e posta o card de análise diretamente no Chat
+ *    usando o token OAuth recebido — que tem permissão no workspace do escritório
+ * 5. Retorna imediatamente "Analisando..." para não dar timeout
  */
 function _processarPdfNoAppsScript(e, pdfAttachment) {
   var userName = (e.user && e.user.displayName) ? e.user.displayName : "Advogado";
+  var spaceName = (e.space && e.space.name) ? e.space.name : "";
+  var threadName = (e.message && e.message.thread && e.message.thread.name) ? e.message.thread.name : "";
   var tempFileId = null;
 
   try {
-    // 1. Obtém token OAuth do usuário (tem permissão chat.messages.readonly)
+    // 1. Obtém token OAuth do usuário (tem permissão no workspace)
     var token = ScriptApp.getOAuthToken();
 
-    // 2. Monta URL de download via Chat Media API com token do usuário
+    // 2. Baixa o PDF
     var dataRef = pdfAttachment.attachmentDataRef || {};
     var resourceName = dataRef.resourceName || "";
 
@@ -79,27 +80,21 @@ function _processarPdfNoAppsScript(e, pdfAttachment) {
     }
 
     var downloadUrl = "https://chat.googleapis.com/v1/media/" + resourceName + "?alt=media";
-    Logger.log("[PDF] Baixando: " + downloadUrl.substring(0, 100));
-
     var resp = UrlFetchApp.fetch(downloadUrl, {
       headers: { "Authorization": "Bearer " + token },
       muteHttpExceptions: true
     });
-
-    Logger.log("[PDF] Status download: " + resp.getResponseCode());
 
     if (resp.getResponseCode() !== 200) {
       Logger.log("[PDF] Erro download: " + resp.getContentText().substring(0, 300));
       return { text: "⚠️ Não consegui baixar o PDF (HTTP " + resp.getResponseCode() + "). Tente reenviar o arquivo." };
     }
 
-    // 3. Salva no Drive temporariamente para extrair texto
+    // 3. Salva no Drive temporariamente e extrai texto
     var pdfBlob = resp.getBlob().setName("temp_decisao_" + Date.now() + ".pdf");
     var tempFile = DriveApp.createFile(pdfBlob);
     tempFileId = tempFile.getId();
-    Logger.log("[PDF] Salvo no Drive temporariamente: " + tempFileId);
 
-    // 4. Extrai texto convertendo PDF → Google Doc via Drive API
     var texto = extrairTextoDoPdf(tempFileId);
     Logger.log("[PDF] Texto extraído: " + (texto ? texto.length + " chars" : "nulo"));
 
@@ -107,56 +102,34 @@ function _processarPdfNoAppsScript(e, pdfAttachment) {
       return { text: "⚠️ Não consegui extrair texto do PDF. O arquivo pode estar escaneado ou corrompido." };
     }
 
-    // 5. Envia texto para o Render analisar (mesmo endpoint que já funciona)
-    var resp2 = chamarRenderSync("/processar-texto-sync", {
-      texto_pdf: texto,
-      advogado: userName,
-      texto: ""
+    // 4. Dispara análise assíncrona no Render, passando o token OAuth do usuário.
+    //    O Render processa em background e usa esse token para postar o card no Chat.
+    //    Não aguarda resposta (sem chamarRenderSync) para evitar timeout de 30s.
+    UrlFetchApp.fetch(RENDER_URL + "/analisar-e-responder", {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({
+        texto_pdf: texto,
+        advogado: userName,
+        space_name: spaceName,
+        thread_name: threadName,
+        oauth_token: token
+      }),
+      muteHttpExceptions: true
     });
 
-    if (!resp2 || resp2.status !== "ok" || !resp2.resultado) {
-      Logger.log("[PDF] Erro Render: " + JSON.stringify(resp2));
-      return { text: "⚠️ Erro ao processar a análise. Tente novamente." };
-    }
-
-    // 6. Retorna resultado como card
-    var textoHtml = String(resp2.resultado || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\n/g, "<br>");
-
+    // 5. Retorna imediatamente — análise chega como novo card em ~30-60s
+    var primeiro = userName.split(" ")[0];
     return {
-      actionResponse: { type: "NEW_MESSAGE" },
-      cardsV2: [{
-        cardId: "analise_resultado",
-        card: {
-          header: getBaseCardHeader("✅ Análise concluída"),
-          sections: [
-            { widgets: [{ textParagraph: { text: textoHtml } }] },
-            {
-              widgets: [{
-                buttonList: {
-                  buttons: [
-                    { text: "✅ Confirmar", onClick: { action: { "function": "confirm_decision" } } },
-                    { text: "✏️ Corrigir", onClick: { action: { "function": "open_correction_dialog" } } },
-                    { text: "❌ Cancelar", onClick: { action: { "function": "cancel_decision" } } }
-                  ]
-                }
-              }]
-            }
-          ]
-        }
-      }]
+      text: "⏳ *Analisando decisão, " + primeiro + "!*\n_O resultado aparecerá aqui em instantes._"
     };
 
   } catch (err) {
     Logger.log("Erro _processarPdfNoAppsScript: " + err);
     return { text: "⚠️ Erro interno ao processar o PDF: " + err.message };
   } finally {
-    // 7. Apaga arquivo temporário do Drive sempre, mesmo em caso de erro
     if (tempFileId) {
-      try { DriveApp.getFileById(tempFileId).setTrashed(true); } catch(e) {}
+      try { DriveApp.getFileById(tempFileId).setTrashed(true); } catch(e2) {}
     }
   }
 }
