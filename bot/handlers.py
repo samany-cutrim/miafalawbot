@@ -508,7 +508,7 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
     # Pedidos indeferidos (vitórias)
     pedidos_ind = d.get('pedidos_indeferidos') or []
     if isinstance(pedidos_ind, list) and pedidos_ind:
-        r += "🏆 *Pedidos Negados (vitórias da empresa):*\n"
+        r += "🏆 *Pedidos Indeferidos (vitórias da empresa):*\n"
         for item in pedidos_ind:
             r += f"  • {item}\n"
         r += "\n"
@@ -1035,43 +1035,74 @@ async def processar_pdf(pdf_url: str, advogado: str, texto: str, webhook_url: st
 # BUSCA
 # ---------------------------------------------------------------------------
 
-PROMPT_BUSCA = """Você é especialista em direito trabalhista brasileiro.
+PROMPT_BUSCA = """Você é uma advogada trabalhista sênior especializada em defesa empresarial. Sua tarefa é recuperar e analisar precedentes jurídicos relevantes de uma base de dados interna do escritório.
 
-CONTEXTO: Este escritório representa SEMPRE a empresa (reclamada). Precedentes favoráveis são decisões que beneficiaram a empresa. Precedentes desfavoráveis são decisões que prejudicaram a empresa.
+═══════════════════════════════════════════════
+PAPEL DO ESCRITÓRIO
+═══════════════════════════════════════════════
+Este escritório representa EXCLUSIVAMENTE a empresa (reclamada). Portanto:
+- Precedente FAVORÁVEL = decisão que protegeu, isentou ou reduziu condenação da empresa.
+- Precedente DESFAVORÁVEL = decisão que condenou ou prejudicou a empresa — útil para antecipar riscos e preparar estratégia de defesa.
 
-Busque nos dados abaixo precedentes {tipo_label} À EMPRESA relacionados a: "{tema}"
+═══════════════════════════════════════════════
+BUSCA SOLICITADA
+═══════════════════════════════════════════════
+Tipo: {tipo_label}
+Tema/Consulta: "{tema}"
 
-INSTRUÇÕES:
-- O termo de busca pode ser um TEMA JURÍDICO (ex: "horas extras", "vínculo empregatício") OU um NOME DE CLIENTE/EMPRESA (ex: "iFood", "Loft").
-- Se o termo parecer um nome de empresa ou cliente, filtre pela coluna "CLIENTE" (busca parcial, sem distinção de maiúsculas/minúsculas).
-- Se o termo parecer um tema jurídico, analise as colunas "ENTENDIMENTOS FAVORÁVEIS" e "ENTENDIMENTOS DESFAVORÁVEIS".
-- Para busca de FAVORÁVEIS, foque na coluna "ENTENDIMENTOS FAVORÁVEIS".
-- Para busca de DESFAVORÁVEIS, foque na coluna "ENTENDIMENTOS DESFAVORÁVEIS".
-- Use busca semântica: encontre registros relacionados ao termo, mesmo sem correspondência exata de palavras.
-- Se não encontrar nenhum precedente relacionado, retorne total_encontrados = 0 e precedentes = [].
+═══════════════════════════════════════════════
+REGRAS DE IDENTIFICAÇÃO DO TIPO DE BUSCA
+═══════════════════════════════════════════════
+1. NOME DE CLIENTE/EMPRESA — Se o termo for um nome próprio de empresa (ex: "iFood", "Loft", "Ambev"), filtre prioritariamente pela coluna "CLIENTE" (correspondência parcial, sem distinção de maiúsculas).
+2. NÚMERO DE PROCESSO — Se o termo tiver formato de processo (ex: "0001234-56.2023"), filtre pela coluna "NÚMERO DO PROCESSO".
+3. NOME DE MAGISTRADO — Se o termo parecer um nome de juiz ou desembargador, filtre pela coluna "JUIZ/RELATOR".
+4. TEMA JURÍDICO — Para qualquer outro caso (ex: "horas extras", "dano moral", "terceirização", "vínculo empregatício"), aplique busca semântica nas colunas relevantes:
+   - Para FAVORÁVEIS: priorize "ENTENDIMENTOS FAVORÁVEIS" e "OBSERVAÇÕES".
+   - Para DESFAVORÁVEIS: priorize "ENTENDIMENTOS DESFAVORÁVEIS" e "OBSERVAÇÕES".
+   - Considere também "PEDIDOS INDEFERIDOS" (favoráveis) e "PEDIDOS DEFERIDOS" (desfavoráveis) como fontes secundárias.
 
-Dados da planilha (lista de registros em JSON):
+═══════════════════════════════════════════════
+CRITÉRIOS DE RELEVÂNCIA (aplique na ordem)
+═══════════════════════════════════════════════
+1. Correspondência direta do tema no texto do entendimento.
+2. Mesma matéria jurídica por sinonímia ou expressão equivalente (ex: "jornada" ≈ "horas extras", "dano extrapatrimonial" ≈ "dano moral").
+3. Mesmo resultado prático (procedência/improcedência) mesmo que o fundamento seja diferente.
+4. Decisões mais recentes têm peso levemente maior.
+5. Decisões de TRT ou TST têm peso maior que sentenças de 1ª instância para formação de tese.
+
+Ordene os resultados do mais relevante para o menos relevante.
+Inclua no máximo 10 precedentes. Se houver mais, selecione os mais representativos e variados (diferentes TRTs, datas, argumentos).
+
+═══════════════════════════════════════════════
+DADOS DA PLANILHA
+═══════════════════════════════════════════════
 {dados}
 
-Retorne APENAS JSON válido com esta estrutura exata:
+═══════════════════════════════════════════════
+FORMATO DE RESPOSTA — APENAS JSON VÁLIDO
+═══════════════════════════════════════════════
 {{
-  "tema_buscado": "tema informado pelo usuário",
+  "tema_buscado": "tema exato informado pelo usuário",
   "tipo": "FAVORÁVEIS ou DESFAVORÁVEIS",
   "total_encontrados": 0,
   "precedentes": [
     {{
       "numero_processo": "número do processo",
-      "advogado": "sigla do advogado",
-      "cliente": "nome do cliente",
+      "advogado": "sigla do advogado responsável",
+      "cliente": "nome do cliente/empresa",
       "trt": "TRT-X ou TST",
       "data_decisao": "data da decisão",
-      "tipo_decisao": "Sentença ou Acórdão",
-      "entendimento_relevante": "trecho do entendimento relacionado ao tema buscado",
-      "como_usar": "como este precedente pode ser usado pela empresa em outros casos"
+      "tipo_decisao": "Sentença / Acórdão / Decisão Monocrática",
+      "resultado_geral": "resultado resumido (ex: improcedente, parcialmente procedente)",
+      "entendimento_relevante": "trecho ou resumo do entendimento diretamente relacionado ao tema buscado — seja específico",
+      "fundamento_juridico": "base legal ou súmula citada na decisão (se disponível)",
+      "como_usar": "orientação prática e objetiva de como replicar este precedente em novos casos — mencione o argumento central e o contexto ideal de aplicação",
+      "relevancia": "ALTA / MÉDIA / BAIXA — justifique brevemente"
     }}
   ],
-  "tese_consolidada": "tese consolidada do ponto de vista da empresa para usar em defesa",
-  "argumentos_principais": "principais argumentos que a empresa pode usar baseado nestes precedentes"
+  "tese_consolidada": "síntese das teses favoráveis/desfavoráveis encontradas, redigida como argumento jurídico coeso que a empresa pode usar em petições",
+  "argumentos_principais": ["argumento 1 em uma frase objetiva", "argumento 2", "argumento 3"],
+  "alertas": "riscos, contradições entre precedentes ou pontos de atenção que o advogado deve considerar (deixe vazio se não houver)"
 }}"""
 
 
@@ -1125,23 +1156,54 @@ def _formatar_busca_todos(tipo: str, rows: list[dict]) -> str:
 
 
 def _formatar_busca(d: dict) -> str:
-    tipo = (_get(d, "tipo", default="")).upper()
-    r  = f"🔍 *PRECEDENTES {tipo}*\n\n"
-    r += f"📌 *Tema:* {_get(d, 'tema_buscado', 'tema')}\n"
-    r += f"📊 *Encontrados:* {d.get('total_encontrados', 0)}\n\n"
+    tipo     = (_get(d, "tipo", default="")).upper()
+    icone    = "✅" if "FAVORÁVEIS" in tipo else "⚠️"
+    total    = d.get("total_encontrados", 0)
+
+    r  = f"🔍 *PRECEDENTES {tipo}*\n"
+    r += f"📌 *Tema:* {_get(d, 'tema_buscado', 'tema')} | {icone} *{total} encontrado(s)*\n"
+    r += "─" * 40 + "\n\n"
+
     for i, p in enumerate(d.get("precedentes") or [], 1):
-        processo = _get(p, "numero_processo", "NÚMERO DO PROCESSO", "numero processo")
-        cliente  = _get(p, "cliente", "CLIENTE")
-        trt      = _get(p, "trt", "TRT")
-        data     = _get(p, "data_decisao", "DATA DA DECISÃO", "data decisao")
-        entend   = _get(p, "entendimento_relevante", "ENTENDIMENTOS FAVORÁVEIS", "ENTENDIMENTOS DESFAVORÁVEIS", "entendimento")
-        uso      = _get(p, "como_usar", "observacoes_precedente", "OBSERVAÇÕES")
-        r += f"{i}. *{processo}*\n"
-        r += f"   {cliente} | {trt} | {data}\n"
-        r += f"   _{entend}_\n"
-        r += f"   💡 {uso}\n\n"
-    r += f"*Tese consolidada:*\n{_get(d, 'tese_consolidada')}\n\n"
-    r += f"*Argumentos:*\n{_get(d, 'argumentos_principais')}"
+        processo  = _get(p, "numero_processo", "NÚMERO DO PROCESSO", "numero processo")
+        cliente   = _get(p, "cliente", "CLIENTE")
+        trt       = _get(p, "trt", "TRT")
+        data      = _get(p, "data_decisao", "DATA DA DECISÃO", "data decisao")
+        tipo_dec  = _get(p, "tipo_decisao", default="")
+        resultado = _get(p, "resultado_geral", default="")
+        entend    = _get(p, "entendimento_relevante", "ENTENDIMENTOS FAVORÁVEIS", "ENTENDIMENTOS DESFAVORÁVEIS", "entendimento")
+        fund      = _get(p, "fundamento_juridico", default="")
+        uso       = _get(p, "como_usar", "observacoes_precedente", "OBSERVAÇÕES")
+        relev     = _get(p, "relevancia", default="")
+
+        relevancia_str = f" [{relev}]" if relev and relev != "N/A" else ""
+        r += f"*{i}. {processo}*{relevancia_str}\n"
+        r += f"   🏢 {cliente} | 🏛️ {trt} | 📅 {data}"
+        if tipo_dec and tipo_dec != "N/A":
+            r += f" | _{tipo_dec}_"
+        r += "\n"
+        if resultado and resultado != "N/A":
+            r += f"   📋 Resultado: {resultado}\n"
+        r += f"   📝 {entend}\n"
+        if fund and fund != "N/A":
+            r += f"   ⚖️ _Fundamento: {fund}_\n"
+        r += f"   💡 *Como usar:* {uso}\n\n"
+
+    r += "─" * 40 + "\n"
+    r += f"*📚 Tese Consolidada:*\n{_get(d, 'tese_consolidada')}\n\n"
+
+    argumentos = d.get("argumentos_principais")
+    if isinstance(argumentos, list):
+        r += "*🎯 Argumentos Principais:*\n"
+        for arg in argumentos:
+            r += f"• {arg}\n"
+    elif argumentos and argumentos != "N/A":
+        r += f"*🎯 Argumentos Principais:*\n{argumentos}\n"
+
+    alertas = d.get("alertas", "")
+    if alertas and alertas not in ("N/A", "", None):
+        r += f"\n⚠️ *Atenção:* _{alertas}_"
+
     return r
 
 

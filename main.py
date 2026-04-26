@@ -78,7 +78,7 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook, send_card
+from bot.webhook import send_webhook, send_card, send_interactive_card
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -529,6 +529,7 @@ async def _processar_pdf_background(
     advogado: str,
     cliente: str,
     tipo: str,
+    space_name: str,
     webhook_url: str,
 ):
     """
@@ -559,11 +560,20 @@ async def _processar_pdf_background(
             tipo_responsabilidade=tipo,
         )
 
-        # Envia card com botões via webhook
-        fallback = f"✅ Análise concluída, {advogado}!\n\n{resultado}"
-        card = _analysis_webhook_card(advogado, resultado)
-        card["_fallback_text"] = fallback
-        await send_card(webhook_url, card)
+        # Envia card interativo com botões via Chat REST API (Service Account)
+        primeiro = advogado.strip().split()[0]
+        card = _analysis_actions_card(resultado)
+        enviado = await send_interactive_card(
+            space_name=space_name,
+            card=card,
+            sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
+            fallback_text=f"✅ Análise concluída, {primeiro}!\n\nMencione @Mia Falaw Bot para ver o resultado.",
+        )
+        if not enviado and webhook_url:
+            await send_webhook(
+                webhook_url,
+                f"✅ *Análise concluída, {primeiro}!*\n\nMencione *@Mia Falaw Bot* no chat para ver o resultado completo. 👉"
+            )
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
@@ -691,11 +701,13 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                     "⚠️ Não consegui identificar o arquivo PDF. Tente enviar novamente."
                 )
 
-            # Usa WEBHOOK_URL do env (variável no Render)
+            # Extrai space_name para usar a Chat REST API no background
+            space_name = (msg_obj.get("space") or {}).get("name") or ""
+
+            # Usa WEBHOOK_URL do env (variável no Render) para fallback
             webhook_url = WEBHOOK_URL
-            if not webhook_url:
-                space_name = (msg_obj.get("space") or {}).get("name") or ""
-                logger.warning("[PDF] WEBHOOK_URL não configurado para %s (space: %s)", advogado, space_name)
+            if not space_name:
+                logger.warning("[PDF] space_name não encontrado para %s", advogado)
 
             # Dispara análise em background — resposta imediata para o Chat
             background_tasks.add_task(
@@ -704,6 +716,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                 advogado=advogado,
                 cliente=cliente,
                 tipo=tipo,
+                space_name=space_name,
                 webhook_url=webhook_url,
             )
 
@@ -978,9 +991,13 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
     )
     if button_payload:
         action        = button_payload.get("action") or {}
-        function_name = action.get("function") or action.get("actionMethodName") or ""
         params        = action.get("parameters") or []
         raw_form      = button_payload.get("formInputs") or {}
+
+        # Extrai __method dos parameters (padrão do bot)
+        method_param = next((p.get("value") for p in params if p.get("key") == "__method"), "")
+        function_name = method_param or action.get("actionMethodName") or action.get("function") or ""
+
         compat_form   = {
             k: {"stringInputs": {"value": v.get("stringInputs", {}).get("value", [])}}
             for k, v in raw_form.items()
