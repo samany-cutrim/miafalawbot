@@ -616,7 +616,7 @@ async def _handle_message(event: dict) -> dict:
                         import base64 as _b64
                         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _as_client:
                             _as_resp = await _as_client.post(
-                                "https://script.google.com/a/macros/falaw.com.br/s/AKfycbw7PwqTvll76aFAtbbFq3DRwDbtnDc3VKU6X-ixES9jBXsLx4oGGwwPfAokoIgJbCqQ/exec",
+                                "https://script.google.com/a/macros/falaw.com.br/s/AKfycbyg7B1QiZoD_YpaGBCR5qXZEX_5bnrzKTR3WgAYjYbk_xrMyTgubdEmMqa67pZG3CBz/exec",
                                 json={"action": "download_pdf", "resource_name": resource_name}
                             )
                         logger.info("[PDF] Apps Script status: %s", _as_resp.status_code)
