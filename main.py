@@ -78,7 +78,7 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook
+from bot.webhook import send_webhook, send_card
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -334,6 +334,37 @@ def _ajuda_card() -> dict:
     }
 
 
+def _analysis_webhook_card(advogado: str, analysis_text: str) -> dict:
+    """Card com análise + botões enviado via Incoming Webhook (background task)."""
+    return {
+        "cardId": "analysis_actions",
+        "card": {
+            "header": {"title": "Mia Falaw Bot", "subtitle": f"✅ Análise concluída — aguardando confirmação"},
+            "sections": [
+                {
+                    "widgets": [
+                        {"textParagraph": {"text": _as_html(f"✅ Análise concluída, {advogado}!\n\n{analysis_text}")}},
+                        {
+                            "buttonList": {
+                                "buttons": [
+                                    _primary_button("✅ Confirmar", "confirm_decision"),
+                                    _primary_button("❌ Cancelar", "cancel_decision"),
+                                    _primary_button("✏️ Corrigir", "request_correction"),
+                                ]
+                            }
+                        },
+                        {
+                            "textParagraph": {
+                                "text": "<i>Para corrigir: clique em ✏️ Corrigir e depois mencione @Mia Falaw Bot com a instrução.</i>"
+                            }
+                        },
+                    ]
+                }
+            ],
+        },
+    }
+
+
 def _analysis_actions_card(analysis_text: str) -> dict:
     return _card_with_buttons(
         "Análise concluída — aguardando confirmação",
@@ -528,16 +559,10 @@ async def _processar_pdf_background(
             tipo_responsabilidade=tipo,
         )
 
-        # Envia card de análise via webhook (texto simples + botões via texto)
-        await send_webhook(
-            webhook_url,
-            f"✅ *Análise concluída, {advogado}!*\n\n{resultado}\n\n"
-            f"Use os comandos para confirmar:\n"
-            f"`/confirmar` — salva na planilha\n"
-            f"`/cancelar` — descarta\n"
-            f"`/corrigir [instrução]` — corrige e reanalisa\n\n"
-            f"_Exemplo: `/corrigir resultado deve ser Desfavorável`_"
-        )
+        # Envia card com botões via webhook
+        card = _analysis_webhook_card(advogado, resultado)
+        card["_fallback_text"] = f"✅ Análise concluída, {advogado}!\n\n{resultado}"
+        await send_card(webhook_url, card)
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
