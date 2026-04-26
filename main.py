@@ -610,18 +610,35 @@ async def _handle_message(event: dict) -> dict:
 
                 logger.info("[PDF] Status download: %s", _resp.status_code)
 
-                if _resp.status_code == 404:
-                    logger.error("[PDF] 404 — projeto GCP não tem Chat App configurado")
+                if _resp.status_code != 200:
+                    logger.warning("[PDF] SA falhou (%s) — tentando via Apps Script", _resp.status_code)
+                    try:
+                        import base64 as _b64
+                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _as_client:
+                            _as_resp = await _as_client.post(
+                                "https://script.google.com/a/macros/falaw.com.br/s/AKfycbw7PwqTvll76aFAtbbFq3DRwDbtnDc3VKU6X-ixES9jBXsLx4oGGwwPfAokoIgJbCqQ/exec",
+                                json={"action": "download_pdf", "resource_name": resource_name}
+                            )
+                        logger.info("[PDF] Apps Script status: %s", _as_resp.status_code)
+                        if _as_resp.status_code == 200:
+                            _as_data = _as_resp.json()
+                            if _as_data.get("status") == "ok" and _as_data.get("pdf_base64"):
+                                pdf_bytes = _b64.b64decode(_as_data["pdf_base64"])
+                                logger.info("[PDF] Apps Script OK — %d bytes", len(pdf_bytes))
+                                texto_pdf = extrair_texto_pdf(pdf_bytes)
+                                resultado = await processar_texto_chat(
+                                    texto_pdf=texto_pdf,
+                                    advogado=advogado,
+                                    cliente=cliente,
+                                    tipo_responsabilidade=tipo,
+                                )
+                                return _message_text_and_cards("Análise concluída:", [_analysis_actions_card(resultado)])
+                        logger.error("[PDF] Apps Script falhou: %s", _as_resp.text[:200])
+                    except Exception as _as_exc:
+                        logger.error("[PDF] Erro Apps Script: %s", _as_exc)
                     return _message_text_response(
                         "⚠️ PDF não pôde ser baixado.\n\n"
-                        "Use o botão *Incluir via Formulário* para enviar o texto da decisão.",
-                    )
-
-                if _resp.status_code != 200:
-                    logger.error("[PDF] Erro HTTP %s: %s", _resp.status_code, _resp.text[:300])
-                    return _message_text_response(
-                        "⚠️ PDF não pôde ser baixado (HTTP " + str(_resp.status_code) + ").\n\n"
-                        "Use o botão *Incluir via Formulário* para enviar o texto da decisão."
+                        "Use o botão *Enviar decisão* no menu e cole o texto da decisão."
                     )
 
                 pdf_bytes = _resp.content
