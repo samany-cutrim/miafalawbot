@@ -585,71 +585,43 @@ async def _handle_message(event: dict) -> dict:
                 if not resource_name:
                     return _message_text_response("⚠️ Não consegui identificar o arquivo. Tente enviar o PDF novamente.")
 
-                # Usa userOAuthToken do evento (token do usuário logado no Add-on).
-                # Esse token tem permissão chat.messages.readonly e consegue baixar
-                # anexos do Chat sem precisar de Chat App nativo registrado no GCP.
-                auth_event_obj = event.get("authorizationEventObject") or {}
-                user_oauth_token = auth_event_obj.get("userOAuthToken") or ""
+                # Download via SA com escopo chat.bot
+                # Funciona quando o projeto GCP tem o Chat App corretamente configurado
+                from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
+                from google.oauth2 import service_account
+                import google.auth.transport.requests as _ga_requests
+
+                _creds = service_account.Credentials.from_service_account_file(
+                    GOOGLE_SERVICE_ACCOUNT_FILE,
+                    scopes=["https://www.googleapis.com/auth/chat.bot"]
+                )
+                _auth_req = _ga_requests.Request()
+                _creds.refresh(_auth_req)
+                _token = _creds.token
 
                 _download_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
-                logger.info("[PDF] userOAuthToken presente: %s", bool(user_oauth_token))
+                logger.info("[PDF] Baixando via SA token: %s", _download_url[:120])
 
-                if not user_oauth_token:
-                    # Token ausente: retorna requesting_google_scopes para forçar
-                    # tela de autorização OAuth do Add-on.
-                    # O Google Chat re-executa o evento automaticamente após autorização.
-                    logger.warning("[PDF] userOAuthToken ausente — exibindo card com Forms")
-                    return {
-                        "hostAppDataAction": {
-                            "chatDataAction": {
-                                "createMessageAction": {
-                                    "message": {
-                                        "text": "⚠️ Não foi possível ler o PDF automaticamente.",
-                                        "cardsV2": [{
-                                            "cardId": "pdf_fallback",
-                                            "card": {
-                                                "header": {"title": "Mia Falaw Bot", "subtitle": "Use o formulário para enviar a decisão"},
-                                                "sections": [{
-                                                    "widgets": [
-                                                        {"textParagraph": {"text": "Abra o formulário, cole o texto da decisão e envie. A análise será processada automaticamente."}},
-                                                        {"buttonList": {"buttons": [
-                                                            {
-                                                                "text": "📝 Abrir Formulário",
-                                                                "onClick": {"openLink": {"url": "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform?usp=dialog"}}
-                                                            },
-                                                            _primary_button("◀ Menu", "open_home")
-                                                        ]}}
-                                                    ]
-                                                }]
-                                            }
-                                        }]
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                logger.info("[PDF] Baixando com userOAuthToken: %s", _download_url[:100])
                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
                     _resp = await _client.get(
                         _download_url,
-                        headers={"Authorization": f"Bearer {user_oauth_token}"}
+                        headers={"Authorization": f"Bearer {_token}"}
                     )
 
                 logger.info("[PDF] Status download: %s", _resp.status_code)
 
-                if _resp.status_code == 401 or _resp.status_code == 403:
-                    logger.error("[PDF] Token sem permissão (%s)", _resp.status_code)
+                if _resp.status_code == 404:
+                    logger.error("[PDF] 404 — projeto GCP não tem Chat App configurado")
                     return _message_text_response(
-                        "⚠️ Sem permissão para baixar o PDF.\n\n"
-                        "Remova o bot deste espaço e adicione novamente para reautorizar."
+                        "⚠️ PDF não pôde ser baixado.\n\n"
+                        "Use o botão *Incluir via Formulário* para enviar o texto da decisão.",
                     )
 
                 if _resp.status_code != 200:
                     logger.error("[PDF] Erro HTTP %s: %s", _resp.status_code, _resp.text[:300])
                     return _message_text_response(
                         "⚠️ PDF não pôde ser baixado (HTTP " + str(_resp.status_code) + ").\n\n"
-                        "Use o botão *Enviar decisão* no menu e cole o texto da decisão."
+                        "Use o botão *Incluir via Formulário* para enviar o texto da decisão."
                     )
 
                 pdf_bytes = _resp.content
