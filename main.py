@@ -671,11 +671,17 @@ async def _handle_message(event: dict) -> dict:
         else:
             # Sem PDF — lembra o usuário
             return _message_text_and_cards(
-                "📎 Aguardando o PDF da decisão. Arraste o arquivo .pdf aqui no chat.",
+                "📝 Use o Formulário abaixo para enviar o texto da decisão.",
                 [_card_with_buttons(
-                    "Aguardando PDF",
-                    "Anexe o arquivo PDF da decisão diretamente nesta conversa.",
-                    [_primary_button("❌ Cancelar", "cancelar_pdf")],
+                    "Aguardando decisão",
+                    "Use o Formulário para colar o texto da decisão. A análise será processada automaticamente.",
+                    [
+                        _primary_button("❌ Cancelar", "cancelar_pdf"),
+                        {
+                            "text": "📝 Abrir Formulário",
+                            "onClick": {"openLink": {"url": "https://docs.google.com/forms/d/e/1FAIpQLSfrRjaMCnRojpbLVIjWKPKOYew3Mp_PwwaYzogpS9XbOWfzsg/viewform?usp=dialog"}}
+                        }
+                    ],
                     "aguardando_pdf"
                 )]
             )
@@ -763,7 +769,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                 "chatDataAction": {
                     "createMessageAction": {
                         "message": {
-                            "text": "✅ Metadados salvos! Agora *envie o PDF* da decisão aqui no chat (arraste o arquivo .pdf para esta conversa).",
+                            "text": "✅ Metadados salvos! Use o botão *Incluir via Formulário* para enviar o texto da decisão.",
                             "cardsV2": [_card_with_buttons(
                                 "📎 Envie o PDF da decisão",
                                 "Cliente: " + (cliente or "(não informado)") + "\nTipo: " + (tipo or "(não informado)") + "\n\nArraste o arquivo .pdf diretamente aqui no chat.\n\n📝 Se o PDF não funcionar, use o Formulário para incluir o texto da decisão.",
