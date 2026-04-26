@@ -594,35 +594,14 @@ async def _processar_pdf_background(
 
         primeiro = advogado.strip().split()[0]
 
-        # Envia análise como texto via webhook (sempre funciona)
+        # Envia análise como texto via webhook
         if webhook_url:
             await send_webhook(
                 webhook_url,
-                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
+                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
+                f"_Responda @Mia Falaw Bot para confirmar, corrigir ou cancelar._"
             )
-
-        # Tenta enviar card de botões via token OAuth do usuário
-        chave = advogado.strip().lower().split()[0]
-        refresh_token = await carregar_token_oauth(chave)
-        enviado = False
-        if refresh_token and space_name:
-            access_token = await refresh_access_token(refresh_token)
-            if access_token:
-                card = _analysis_actions_card()
-                enviado = await send_card_with_user_token(
-                    space_name=space_name,
-                    card=card,
-                    oauth_token=access_token,
-                )
-
-        if not enviado:
-            if webhook_url:
-                auth_link = f"https://mia-falaw-bot.onrender.com/auth?advogado={primeiro}"
-                await send_webhook(
-                    webhook_url,
-                    f"_Para confirmar ou cancelar com botões interativos, ative o bot:_ {auth_link}"
-                )
-            logger.warning("[BG] Token OAuth não disponível para %s", advogado)
+        logger.info("[BG] Análise enviada via webhook para %s", advogado)
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
@@ -726,7 +705,10 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         if relatorio_pendente:
             primeiro = advogado.strip().split()[0]
             logger.info("[MESSAGE] Sessão pendente detectada para %s — exibindo card de análise", advogado)
-            return _message_text_and_cards(relatorio_pendente, [_analysis_actions_card()])
+            # Envia a análise como texto separado via webhook, retorna só o card de botões
+            if WEBHOOK_URL:
+                await send_webhook(WEBHOOK_URL, relatorio_pendente)
+            return _new_message_cards([_analysis_actions_card()])
 
     # Aguardando correção
     if await esta_aguardando_correcao(advogado):

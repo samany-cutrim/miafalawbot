@@ -201,7 +201,7 @@ _GITHUB_MODELS_FALLBACK = [
     "Meta-Llama-3.1-70B-Instruct",
     "Meta-Llama-3.1-8B-Instruct",
 ]
-_GITHUB_MAX_CHARS = 12000  # reduzido para caber no timeout de 30s do Google Chat
+_GITHUB_MAX_CHARS = 28000  # aumentado; truncação inteligente (início+fim) evita perder dados
 
 # Palavras que identificam modelos que não devem ser usados para chat/completion.
 _NON_CHAT_KEYWORDS = ("text-embedding", "cohere", "embed")
@@ -324,9 +324,13 @@ async def _chamar_ia(prompt: str) -> str:
             )
 
         # Trunca o prompt para não exceder o limite de tokens do endpoint
-        prompt_github = prompt[:_GITHUB_MAX_CHARS] if len(prompt) > _GITHUB_MAX_CHARS else prompt
+        # Truncagem inteligente: pega primeiro bloco + último bloco para não perder dados de assinatura/data
         if len(prompt) > _GITHUB_MAX_CHARS:
+            metade = _GITHUB_MAX_CHARS // 2
+            prompt_github = prompt[:metade] + "\n\n[...trecho intermediário omitido...]\n\n" + prompt[-metade:]
             logger.warning("Prompt truncado de %d para %d chars para GitHub Copilot.", len(prompt), _GITHUB_MAX_CHARS)
+        else:
+            prompt_github = prompt
         for model_name in modelos:
             try:
                 response = await _copilot.chat.completions.create(
