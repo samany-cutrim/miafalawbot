@@ -70,6 +70,7 @@ from bot.handlers import (
     corrigir_sessao_data,
     dispensar_email_sessao_data,
     esta_aguardando_correcao,
+    obter_relatorio_pendente,
     extrair_texto_pdf,
     gerar_email_sessao_data,
     marcar_aguardando_correcao,
@@ -669,6 +670,18 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
     msg_obj = event.get("message") or {}
 
     logger.info("[MESSAGE] user=%s texto=%r", advogado, texto_lower[:80])
+
+    # Sessão pendente com análise pronta — mostra card de ação diretamente
+    # (acontece quando o usuário menciona o bot após análise via background task)
+    if not await _esta_aguardando_pdf(advogado) and not await esta_aguardando_correcao(advogado):
+        relatorio_pendente = await obter_relatorio_pendente(advogado)
+        if relatorio_pendente:
+            primeiro = advogado.strip().split()[0]
+            logger.info("[MESSAGE] Sessão pendente detectada para %s — exibindo card de análise", advogado)
+            return _message_text_and_cards(
+                f"✅ Análise pronta, {primeiro}! Confira e confirme abaixo:\n\n{relatorio_pendente}",
+                [_analysis_actions_card(relatorio_pendente)],
+            )
 
     # Aguardando correção
     if await esta_aguardando_correcao(advogado):

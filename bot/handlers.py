@@ -692,6 +692,49 @@ async def esta_aguardando_correcao(advogado: str) -> bool:
     return bool(row.get("_aguardando_correcao"))
 
 
+async def obter_relatorio_pendente(advogado: str) -> str | None:
+    """Retorna o relatório formatado se houver sessão pendente de confirmação.
+    Retorna None se não houver sessão, ou se estiver aguardando PDF/correção."""
+    chave = _chave_sessao(advogado)
+    sessoes = await carregar_sessoes()
+    row = sessoes.get(chave)
+    if not row:
+        return None
+    # Ignora sessões que ainda estão em outro estado
+    if row.get("_aguardando_correcao"):
+        return None
+    # Precisa ter pelo menos número de processo para ser uma análise real
+    if not row.get("NÚMERO DO PROCESSO") and not row.get("numero_processo"):
+        return None
+    sigla = resolver_sigla(advogado)
+    # Reconstrói o objeto analise a partir da row salva
+    analise = {
+        "trt":                          row.get("TRT", "N/A"),
+        "numero_processo":               row.get("NÚMERO DO PROCESSO", "N/A"),
+        "nome_reclamante":               row.get("RECLAMANTE", "N/A"),
+        "data_decisao":                  row.get("DATA", "N/A"),
+        "tipo_decisao":                  row.get("TIPO", "N/A"),
+        "resultado_geral":               row.get("RESULTADO", "N/A"),
+        "cliente_detectado":             row.get("CLIENTE", "N/A"),
+        "tipo_responsabilidade_detectado": row.get("TIPO RESPONSABILIDADE", "N/A"),
+        "juiz_relator":                  row.get("JUIZ/RELATOR", "N/A"),
+        "vara_turma":                    row.get("VARA/TURMA", "N/A"),
+        "pedidos_deferidos":             row.get("PEDIDOS DEFERIDOS", []),
+        "pedidos_indeferidos":           row.get("PEDIDOS INDEFERIDOS", []),
+        "entendimentos_favoraveis":      row.get("ENTENDIMENTOS FAVORÁVEIS", []),
+        "entendimentos_desfavoraveis":   row.get("ENTENDIMENTOS DESFAVORÁVEIS", []),
+        "fundamentos_juridicos":         row.get("FUNDAMENTOS", "N/A"),
+        "valor_condenacao":              row.get("VALOR CONDENAÇÃO", "N/A"),
+        "deposito_recursal":             row.get("DEPÓSITO RECURSAL", "N/A"),
+        "prazo_recursal":                row.get("PRAZO RECURSAL", "N/A"),
+        "resumo_geral":                  row.get("RESUMO", "N/A"),
+        "nivel_risco":                   row.get("NÍVEL RISCO", "N/A"),
+        "recomendacao":                  row.get("RECOMENDAÇÃO", "N/A"),
+        "observacoes_precedente":        row.get("OBSERVAÇÕES", "N/A"),
+    }
+    return formatar_relatorio(analise, sigla)
+
+
 # ---------------------------------------------------------------------------
 # GERAÇÃO DE E-MAIL — /sim e /nao
 # ---------------------------------------------------------------------------
