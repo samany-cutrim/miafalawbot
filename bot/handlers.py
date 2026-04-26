@@ -197,7 +197,7 @@ _GITHUB_MODELS_FALLBACK = [
     "gpt-4o",
     "gpt-5",
 ]
-_GITHUB_MAX_CHARS = 20000  # margem segura abaixo de 8000 tokens
+_GITHUB_MAX_CHARS = 12000  # reduzido para caber no timeout de 30s do Google Chat
 
 # Palavras que identificam modelos que não devem ser usados para chat/completion.
 _NON_CHAT_KEYWORDS = ("text-embedding", "cohere", "embed")
@@ -326,7 +326,7 @@ async def _chamar_ia(prompt: str) -> str:
             try:
                 response = await _copilot.chat.completions.create(
                     model=model_name,
-                    max_tokens=4096,
+                    max_tokens=2048,
                     messages=[
                         {
                             "role": "system",
