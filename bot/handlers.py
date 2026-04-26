@@ -8,8 +8,13 @@ import io
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pdfplumber
+
+_TZ_BRASILIA = timezone(timedelta(hours=-3))
+
+def _now_br() -> datetime:
+    return datetime.now(_TZ_BRASILIA)
 
 from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
 from bot.config import GITHUB_TOKEN
@@ -545,7 +550,7 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
 
     r += f"📚 *Fundamentos Jurídicos:* {d.get('fundamentos_juridicos', 'N/A')}\n\n"
     r += f"📌 *Uso como Precedente:*\n{d.get('observacoes_precedente', 'N/A')}\n"
-    r += f"\n_Analisado por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
+    r += f"\n_Analisado por {sigla} em {_now_br().strftime('%d/%m/%Y %H:%M')}_"
     return r
 
 
@@ -584,7 +589,7 @@ def _montar_row(analise: dict, sigla: str, hints: dict) -> dict:
         trt = extrair_trt_do_processo(analise.get("numero_processo", ""))
 
     return {
-        "DATA DO REGISTRO":           datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "DATA DO REGISTRO":           _now_br().strftime("%d/%m/%Y %H:%M"),
         "ADVOGADO":                    sigla,
         "TRT":                         trt,
         "NÚMERO DO PROCESSO":          analise.get("numero_processo", ""),
@@ -642,7 +647,7 @@ async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
             f"📄 *Processo:* {processo}\n"
             f"🏢 *Cliente:* {cliente}\n"
             f"📊 *Resultado:* {resultado}\n\n"
-            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_\n\n"
+            f"_Salvo por {sigla} em {_now_br().strftime('%d/%m/%Y %H:%M')}_\n\n"
             f"Agora, que tal gerar uma sugestão de e-mail para o cliente? ✉️",
             True,
         )

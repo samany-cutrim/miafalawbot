@@ -386,23 +386,17 @@ def _analysis_webhook_card(advogado: str, analysis_text: str) -> dict:
     }
 
 
-def _analysis_actions_card(analysis_text: str) -> dict:
+def _analysis_actions_card() -> dict:
+    """Card só com os botões de ação (análise chega como mensagem de texto separada)."""
     return {
         "cardId": "analysis_actions",
         "card": {
             "header": {
                 "title": "Mia Falaw Bot",
-                "subtitle": "✅ Análise concluída — aguardando confirmação",
+                "subtitle": "O que deseja fazer com esta análise?",
             },
             "sections": [
                 {
-                    "header": "📋 Relatório da Decisão",
-                    "widgets": [
-                        {"textParagraph": {"text": _as_html(analysis_text)}},
-                    ],
-                },
-                {
-                    "header": "O que deseja fazer?",
                     "widgets": [
                         {
                             "buttonList": {
@@ -600,14 +594,21 @@ async def _processar_pdf_background(
 
         primeiro = advogado.strip().split()[0]
 
-        # Tenta enviar card interativo via token OAuth do usuário
+        # Envia análise como texto via webhook (sempre funciona)
+        if webhook_url:
+            await send_webhook(
+                webhook_url,
+                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
+            )
+
+        # Tenta enviar card de botões via token OAuth do usuário
         chave = advogado.strip().lower().split()[0]
         refresh_token = await carregar_token_oauth(chave)
         enviado = False
         if refresh_token and space_name:
             access_token = await refresh_access_token(refresh_token)
             if access_token:
-                card = _analysis_actions_card(resultado)
+                card = _analysis_actions_card()
                 enviado = await send_card_with_user_token(
                     space_name=space_name,
                     card=card,
@@ -619,11 +620,9 @@ async def _processar_pdf_background(
                 auth_link = f"https://mia-falaw-bot.onrender.com/auth?advogado={primeiro}"
                 await send_webhook(
                     webhook_url,
-                    f"✅ *Análise concluída, {primeiro}!*\n\n"
-                    f"_Para receber o card com botões de confirmação diretamente, autorize o bot uma vez:_\n"
-                    f"{auth_link}"
+                    f"_Para confirmar ou cancelar com botões interativos, ative o bot:_ {auth_link}"
                 )
-            logger.warning("[BG] Token OAuth não disponível para %s — enviando link de autorização", advogado)
+            logger.warning("[BG] Token OAuth não disponível para %s", advogado)
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
@@ -727,7 +726,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         if relatorio_pendente:
             primeiro = advogado.strip().split()[0]
             logger.info("[MESSAGE] Sessão pendente detectada para %s — exibindo card de análise", advogado)
-            return _new_message_cards([_analysis_actions_card(relatorio_pendente)])
+            return _message_text_and_cards(relatorio_pendente, [_analysis_actions_card()])
 
     # Aguardando correção
     if await esta_aguardando_correcao(advogado):
@@ -737,7 +736,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         ok, msg = await corrigir_sessao_data(advogado, instrucao)
         if not ok:
             return _new_message_text(msg)
-        return _new_message_cards([_analysis_actions_card(msg)])
+        return _message_text_and_cards(msg, [_analysis_actions_card()])
 
     # Aguardando PDF — verifica se há anexo PDF na mensagem
     if await _esta_aguardando_pdf(advogado):
@@ -1234,7 +1233,7 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                     cliente=cliente_hint,
                     tipo_responsabilidade=tipo_hint or "OL",
                 )
-                card = _analysis_actions_card(resultado)
+                card = _analysis_actions_card()
                 enviado = await send_card_with_user_token(
                     space_name=space_name,
                     card=card,
@@ -1243,12 +1242,12 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                 )
                 if not enviado:
                     logger.error("[ANALISAR-BG] Falha ao enviar card para %s", advogado)
-                    if WEBHOOK_URL:
-                        primeiro = advogado.strip().split()[0]
-                        await send_webhook(
-                            WEBHOOK_URL,
-                            f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
-                        )
+                if WEBHOOK_URL:
+                    primeiro = advogado.strip().split()[0]
+                    await send_webhook(
+                        WEBHOOK_URL,
+                        f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
+                    )
             except Exception as exc:
                 logger.exception("[ANALISAR-BG] Erro: %s", exc)
 
