@@ -962,10 +962,17 @@ async def chat_event(request: Request):
     # ------------------------------------------------------------------
     if chat_data.get("addedToSpacePayload") or event.get("type") == "ADDED_TO_SPACE":
         logger.info("[/chat] APP_ADDED user=%s", advogado)
-        return JSONResponse(_message_text_and_cards("Menu principal:", [_home_card()]))
+        return JSONResponse(_message_text_and_cards("Olá! Selecione uma opção:", [_home_card()]))
 
     # ------------------------------------------------------------------
-    # 5. Evento não identificado → home card
+    # 5. REMOVED_FROM_SPACE — responde 200 vazio (sem mensagem)
+    # ------------------------------------------------------------------
+    if chat_data.get("removedFromSpacePayload") or event.get("type") == "REMOVED_FROM_SPACE":
+        logger.info("[/chat] REMOVED_FROM_SPACE user=%s", advogado)
+        return JSONResponse({})
+
+    # ------------------------------------------------------------------
+    # 6. Evento não identificado → home card
     # ------------------------------------------------------------------
     logger.warning("[/chat] evento não tratado keys=%s chat_keys=%s",
                    list(event.keys()), list(chat_data.keys()))
