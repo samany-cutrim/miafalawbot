@@ -331,9 +331,10 @@ async def _chamar_ia(prompt: str) -> str:
                         {
                             "role": "system",
                             "content": (
-                                "Você é um assistente especializado em análise jurídica. "
-                                "Responda APENAS com JSON válido, sem markdown, sem blocos de código, "
-                                "sem explicações e sem texto adicional antes ou depois do JSON."
+                                "Você é Mia, assistente jurídica especializada em direito trabalhista brasileiro, "
+                                "com vasta experiência em análise de decisões judiciais. "
+                                "Quando solicitado a retornar JSON, responda APENAS com JSON válido, sem markdown, "
+                                "sem blocos de código, sem explicações e sem texto adicional antes ou depois do JSON."
                             ),
                         },
                         {"role": "user", "content": prompt_github},
@@ -363,42 +364,63 @@ async def _chamar_ia(prompt: str) -> str:
 # ANÁLISE COM IA
 # ---------------------------------------------------------------------------
 
-PROMPT_ANALISE = """Você é especialista em decisões judiciais trabalhistas brasileiras.
+PROMPT_ANALISE = """Você é Mia, especialista sênior em decisões judiciais trabalhistas brasileiras, com 15 anos de experiência representando empresas em ações trabalhistas.
 
-CONTEXTO IMPORTANTE:
-- Este escritório representa SEMPRE a empresa (reclamada/ré), nunca o trabalhador.
-- "Favorável" significa favorável À EMPRESA (ex: pedido negado, vínculo não reconhecido, condenação reduzida).
-- "Desfavorável" significa desfavorável À EMPRESA (ex: vínculo reconhecido, condenação imposta, recurso negado).
-- Os entendimentos favoráveis são teses que BENEFICIAM a empresa e podem ser usados como precedente.
-- Os entendimentos desfavoráveis são teses que PREJUDICAM a empresa e devem ser monitorados.
+CONTEXTO FUNDAMENTAL:
+- O escritório representa EXCLUSIVAMENTE a empresa (reclamada/ré), NUNCA o trabalhador.
+- "Favorável" = favorável À EMPRESA (pedido negado, vínculo não reconhecido, condenação reduzida, recurso provido para a empresa).
+- "Desfavorável" = desfavorável À EMPRESA (vínculo reconhecido, condenação imposta, recurso negado, pedido deferido).
+- "Parcialmente Favorável" = quando houve condenação mas alguns pedidos foram negados, reduzindo a exposição.
+- Entendimentos favoráveis = teses que PROTEGEM a empresa e podem ser replicadas como precedente.
+- Entendimentos desfavoráveis = teses que PREJUDICAM a empresa e demandam atenção/recurso.
 
-Analise a decisão abaixo e retorne APENAS um JSON válido com os campos:
+TAREFA: Analise profundamente a decisão judicial abaixo. Extraia TODOS os dados relevantes com máxima precisão.
+
+Retorne APENAS um JSON válido com os seguintes campos:
 {{
-  "trt": "TRT-X ou N/A",
-  "numero_processo": "0000000-00.0000.0.00.0000 ou N/A",
-  "nome_reclamante": "nome completo do reclamante/trabalhador ou N/A",
-  "data_decisao": "DD/MM/AAAA — busque no final do documento na assinatura ou cabeçalho ou N/A",
-  "tipo_decisao": "Sentença ou Acórdão",
-  "resultado_geral": "Favorável ou Desfavorável ou Parcialmente Favorável — SEMPRE do ponto de vista da EMPRESA",
-  "cliente_detectado": "nome do réu/reclamado principal (a empresa) ou N/A",
-  "tipo_responsabilidade_detectado": "OL ou Nuvem ou Terceirização ou Subsidiária ou Ex Funcionário ou Ex-Foodlovers ou Marketplace ou N/A",
-  "juiz_relator": "nome completo do juiz singular ou relator do acórdão ou N/A",
-  "vara_turma": "ex: 2ª Vara do Trabalho de São Paulo, 3ª Turma do TST ou N/A",
-  "entendimentos_favoraveis": [{{"tema": "tema jurídico", "entendimento": "tese favorável à empresa"}}],
-  "entendimentos_desfavoraveis": [{{"tema": "tema jurídico", "entendimento": "tese desfavorável à empresa"}}],
-  "fundamentos_juridicos": "artigos, súmulas e precedentes citados na decisão",
-  "valor_condenacao": "R$ 0,00 ou N/A — se favorável à empresa coloque N/A",
-  "resumo_geral": "resumo em 3-5 linhas do ponto de vista da empresa",
-  "observacoes_precedente": "como esta decisão pode ser usada como precedente em outros casos pela empresa"
+  "trt": "TRT-X (ex: TRT-2, TRT-15) ou N/A — extraia do número do processo se necessário",
+  "numero_processo": "formato 0000000-00.0000.0.00.0000 exato do documento ou N/A",
+  "nome_reclamante": "nome completo do trabalhador/reclamante ou N/A",
+  "data_decisao": "DD/MM/AAAA — procure na assinatura final, cabeçalho ou data de publicação ou N/A",
+  "tipo_decisao": "Sentença | Acórdão | Decisão Interlocutória | Despacho",
+  "resultado_geral": "Favorável | Desfavorável | Parcialmente Favorável — SEMPRE do ponto de vista da EMPRESA",
+  "cliente_detectado": "razão social completa do réu/reclamado principal ou N/A",
+  "tipo_responsabilidade_detectado": "OL | Nuvem | Terceirização | Subsidiária | Ex Funcionário | Ex-Foodlovers | Marketplace | N/A",
+  "juiz_relator": "nome completo com titulação (ex: Juiz do Trabalho Dr. João Silva) ou N/A",
+  "vara_turma": "nome completo (ex: 3ª Vara do Trabalho de São Paulo | 2ª Turma do TRT-2) ou N/A",
+  "pedidos_deferidos": ["lista de pedidos/verbas que foram concedidos ao reclamante"],
+  "pedidos_indeferidos": ["lista de pedidos/verbas que foram negados — vitórias para a empresa"],
+  "entendimentos_favoraveis": [
+    {{
+      "tema": "nome do tema jurídico (ex: Vínculo Empregatício, Horas Extras)",
+      "entendimento": "tese exata adotada que beneficia a empresa, citando base legal se houver",
+      "uso_como_precedente": "como replicar essa tese em outros casos semelhantes"
+    }}
+  ],
+  "entendimentos_desfavoraveis": [
+    {{
+      "tema": "nome do tema jurídico",
+      "entendimento": "tese adotada que prejudica a empresa, com análise do impacto",
+      "estrategia_recursal": "qual argumento usar para recorrer ou mitigar esse entendimento"
+    }}
+  ],
+  "fundamentos_juridicos": "todos os artigos CLT/CC, súmulas TST/STJ/STF, OJs, temas repetitivos citados na decisão",
+  "valor_condenacao": "valor líquido em reais (ex: R$ 15.430,00) ou N/A se favorável",
+  "deposito_recursal": "valor estimado de depósito recursal (50% da condenação, limitado ao teto legal) ou N/A",
+  "prazo_recursal": "prazo para recurso (geralmente 8 dias úteis para RO) ou N/A",
+  "resumo_geral": "resumo executivo em 4-6 linhas do ponto de vista da empresa: o que foi decidido, impacto financeiro, risco residual e recomendação imediata",
+  "nivel_risco": "BAIXO | MÉDIO | ALTO | CRÍTICO — avaliação do risco financeiro/jurídico para a empresa",
+  "recomendacao": "RECORRER | AGUARDAR | CUMPRIR | NEGOCIAR — recomendação estratégica com breve justificativa",
+  "observacoes_precedente": "análise detalhada de como usar ou neutralizar esta decisão em outros processos do mesmo cliente ou casos similares"
 }}
 
 CLIENTE (EMPRESA RECLAMADA) INFORMADO PELO ADVOGADO: {cliente}
 TIPO DE RESPONSABILIDADE INFORMADO PELO ADVOGADO: {tipo}
 
-DECISÃO:
+DECISÃO JUDICIAL COMPLETA:
 {texto}
 
-RETORNE APENAS JSON VÁLIDO, sem markdown, sem explicações."""
+RETORNE APENAS JSON VÁLIDO, sem markdown, sem blocos de código, sem texto adicional."""
 
 
 async def analisar_decisao(texto: str, cliente_hint: str, tipo_hint: str) -> dict:
@@ -434,8 +456,26 @@ def _parse_json(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def formatar_relatorio(d: dict, sigla: str) -> str:
-    r = "✅ *ANÁLISE CONCLUÍDA — aguardando confirmação*\n\n"
-    r += f"📋 *{d.get('tipo_decisao', 'N/A')}* — {d.get('resultado_geral', 'N/A')}\n"
+    resultado = d.get('resultado_geral', 'N/A')
+    nivel_risco = d.get('nivel_risco', '')
+    recomendacao = d.get('recomendacao', '')
+
+    # Ícone do resultado
+    if 'Favorável' in resultado and 'Parcialmente' not in resultado:
+        icone_resultado = '🟢'
+    elif 'Parcialmente' in resultado:
+        icone_resultado = '🟡'
+    else:
+        icone_resultado = '🔴'
+
+    # Ícone do risco
+    risco_icones = {'BAIXO': '🟢', 'MÉDIO': '🟡', 'ALTO': '🔴', 'CRÍTICO': '🚨'}
+    icone_risco = risco_icones.get(nivel_risco.upper() if nivel_risco else '', '⚪')
+
+    r = f"{icone_resultado} *ANÁLISE CONCLUÍDA — aguardando confirmação*\n\n"
+
+    # Bloco identificação
+    r += f"📋 *{d.get('tipo_decisao', 'N/A')}* — {icone_resultado} {resultado}\n"
     r += f"🏛️ *TRT:* {d.get('trt', 'N/A')}\n"
     r += f"📄 *Processo:* {d.get('numero_processo', 'N/A')}\n"
     r += f"👤 *Reclamante:* {d.get('nome_reclamante', 'N/A')}\n"
@@ -444,27 +484,67 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
     r += f"📅 *Data:* {d.get('data_decisao', 'N/A')}\n"
     r += f"👨‍⚖️ *Juiz/Relator:* {d.get('juiz_relator', 'N/A')}\n"
     r += f"🏠 *Vara/Turma:* {d.get('vara_turma', 'N/A')}\n"
-    r += f"💰 *Valor:* {d.get('valor_condenacao', 'N/A')}\n\n"
-    r += f"📝 *Resumo:*\n{d.get('resumo_geral', 'N/A')}\n\n"
+    r += f"💰 *Valor:* {d.get('valor_condenacao', 'N/A')}\n"
 
-    favs = d.get("entendimentos_favoraveis") or []
+    if d.get('deposito_recursal') and d.get('deposito_recursal') != 'N/A':
+        r += f"🏦 *Depósito Recursal:* {d.get('deposito_recursal')}\n"
+    if d.get('prazo_recursal') and d.get('prazo_recursal') != 'N/A':
+        r += f"⏰ *Prazo Recursal:* {d.get('prazo_recursal')}\n"
+
+    r += "\n"
+
+    # Resumo executivo
+    r += f"📝 *Resumo Executivo:*\n{d.get('resumo_geral', 'N/A')}\n\n"
+
+    # Risco e recomendação
+    if nivel_risco:
+        r += f"{icone_risco} *Nível de Risco:* {nivel_risco}\n"
+    if recomendacao:
+        rec_icones = {'RECORRER': '⚡', 'AGUARDAR': '⏳', 'CUMPRIR': '✅', 'NEGOCIAR': '🤝'}
+        icone_rec = rec_icones.get(recomendacao.split()[0].upper() if recomendacao else '', '📌')
+        r += f"{icone_rec} *Recomendação:* {recomendacao}\n"
+    r += "\n"
+
+    # Pedidos indeferidos (vitórias)
+    pedidos_ind = d.get('pedidos_indeferidos') or []
+    if isinstance(pedidos_ind, list) and pedidos_ind:
+        r += "🏆 *Pedidos Negados (vitórias da empresa):*\n"
+        for item in pedidos_ind:
+            r += f"  • {item}\n"
+        r += "\n"
+
+    # Pedidos deferidos
+    pedidos_def = d.get('pedidos_deferidos') or []
+    if isinstance(pedidos_def, list) and pedidos_def:
+        r += "⚠️ *Pedidos Deferidos (contra a empresa):*\n"
+        for item in pedidos_def:
+            r += f"  • {item}\n"
+        r += "\n"
+
+    # Entendimentos favoráveis
+    favs = d.get('entendimentos_favoraveis') or []
     if isinstance(favs, list) and favs:
-        r += "✅ *Favoráveis (para a empresa):*\n"
+        r += "✅ *Entendimentos Favoráveis (use como precedente):*\n"
         for i, e in enumerate(favs, 1):
             if isinstance(e, dict):
                 r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
+                if e.get('uso_como_precedente'):
+                    r += f"     _↳ {e.get('uso_como_precedente')}_\n"
         r += "\n"
 
-    desfavs = d.get("entendimentos_desfavoraveis") or []
+    # Entendimentos desfavoráveis
+    desfavs = d.get('entendimentos_desfavoraveis') or []
     if isinstance(desfavs, list) and desfavs:
-        r += "❌ *Desfavoráveis (para a empresa):*\n"
+        r += "❌ *Entendimentos Desfavoráveis (atenção/recurso):*\n"
         for i, e in enumerate(desfavs, 1):
             if isinstance(e, dict):
                 r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
+                if e.get('estrategia_recursal'):
+                    r += f"     _↳ Estratégia: {e.get('estrategia_recursal')}_\n"
         r += "\n"
 
-    r += f"📚 *Fundamentos:* {d.get('fundamentos_juridicos', 'N/A')}\n"
-    r += f"📌 *Observações:* {d.get('observacoes_precedente', 'N/A')}\n"
+    r += f"📚 *Fundamentos Jurídicos:* {d.get('fundamentos_juridicos', 'N/A')}\n\n"
+    r += f"📌 *Uso como Precedente:*\n{d.get('observacoes_precedente', 'N/A')}\n"
     r += f"\n_Analisado por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_"
     return r
 
@@ -534,10 +614,11 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
 
 async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
     chave = _chave_sessao(advogado)
+    primeiro = advogado.strip().split()[0]
     sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
-        return f"⚠️ *{advogado}*, não há análise pendente para confirmar.", False
+        return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para confirmar. Que tal enviar um novo PDF? 😊", False
     try:
         row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
@@ -552,18 +633,22 @@ async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
         await salvar_sessoes(sessoes)
 
         sigla = row.get("ADVOGADO", advogado)
+        processo = row.get('NÚMERO DO PROCESSO', 'N/A')
+        cliente = row.get('CLIENTE', 'N/A')
+        resultado = row.get('RESULTADO DA DECISÃO', 'N/A')
         logger.info("Sessão confirmada para %s", advogado)
         return (
-            f"✅ *Decisão registrada com sucesso!*\n"
-            f"📄 *Processo:* {row.get('NÚMERO DO PROCESSO', 'N/A')}\n"
-            f"🏢 *Cliente:* {row.get('CLIENTE', 'N/A')}\n"
-            f"📊 *Resultado:* {row.get('RESULTADO DA DECISÃO', 'N/A')}\n"
-            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_",
+            f"🎉 Perfeito, {primeiro}! Decisão registrada com sucesso na planilha!\n\n"
+            f"📄 *Processo:* {processo}\n"
+            f"🏢 *Cliente:* {cliente}\n"
+            f"📊 *Resultado:* {resultado}\n\n"
+            f"_Salvo por {sigla} em {datetime.now().strftime('%d/%m/%Y %H:%M')}_\n\n"
+            f"Agora, que tal gerar uma sugestão de e-mail para o cliente? ✉️",
             True,
         )
     except Exception as e:
         logger.exception("Erro ao salvar sessão: %s", e)
-        return "⚠️ Erro ao salvar na planilha. Tente confirmar novamente.", False
+        return f"Ops, {primeiro}! Tive um probleminha ao salvar na planilha. Pode tentar confirmar novamente? 🙏", False
 
 
 async def cancelar_sessao(advogado: str, webhook_url: str):
@@ -572,26 +657,31 @@ async def cancelar_sessao(advogado: str, webhook_url: str):
 
 async def cancelar_sessao_data(advogado: str) -> str:
     chave = _chave_sessao(advogado)
+    primeiro = advogado.strip().split()[0]
     sessoes = await carregar_sessoes()
     if chave in sessoes:
         del sessoes[chave]
         await salvar_sessoes(sessoes)
-        return f"❌ *{advogado}*, análise descartada. Nenhum registro foi salvo."
-    return f"⚠️ *{advogado}*, não há análise pendente para cancelar."
+        return f"Tudo bem, {primeiro}! Análise descartada, nenhum dado foi salvo. Quando quiser, é só enviar um novo PDF! 😊"
+    return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para cancelar. Tudo certo por aqui! 👍"
 
 
 async def marcar_aguardando_correcao(advogado: str) -> str:
     chave = _chave_sessao(advogado)
+    primeiro = advogado.strip().split()[0]
     sessoes = await carregar_sessoes()
     row = sessoes.get(chave)
     if not row:
-        return f"⚠️ *{advogado}*, não há análise pendente para corrigir."
+        return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para corrigir. Envie um PDF para começar! 😊"
     row["_aguardando_correcao"] = True
     sessoes[chave] = row
     await salvar_sessoes(sessoes)
     return (
-        f"✏️ *{advogado}*, me diga no chat o que você quer corrigir na análise.\n"
-        f"Exemplo: `resultado deve ser Desfavorável e TRT é TRT-2`"
+        f"✏️ Claro, {primeiro}! Me diga o que quer corrigir — mencione @Mia Falaw Bot e explique a correção.\n\n"
+        f"Exemplos:\n"
+        f"• _resultado deve ser Desfavorável_\n"
+        f"• _TRT é TRT-2 e vara é 5ª Vara do Trabalho_\n"
+        f"• _cliente é Magazine Luiza e tipo é Subsidiária_"
     )
 
 
@@ -606,37 +696,63 @@ async def esta_aguardando_correcao(advogado: str) -> bool:
 # GERAÇÃO DE E-MAIL — /sim e /nao
 # ---------------------------------------------------------------------------
 
-PROMPT_EMAIL = """Você é especialista em comunicação jurídica trabalhista brasileira.
+PROMPT_EMAIL = """Você é um advogado sênior especializado em direito trabalhista brasileiro, responsável pela comunicação com clientes empresariais.
 
-Redija um e-mail profissional de reporte de decisão judicial para o cliente, com base nos dados abaixo.
-O escritório representa SEMPRE a empresa (reclamada). A comunicação deve ser clara, objetiva e tranquilizadora (ou realista quando desfavorável).
+Redija um e-mail corporativo de reporte de decisão judicial para o cliente, com base nos dados abaixo.
+O escritório representa SEMPRE a empresa (reclamada/ré). O cliente é o gestor jurídico ou diretor da empresa.
 
 DADOS DA DECISÃO:
 - Tipo de decisão: {tipo_decisao}
 - Resultado: {resultado} (do ponto de vista da empresa)
 - Número do processo: {numero_processo}
-- Reclamante: {reclamante}
-- Cliente (empresa): {cliente}
+- Reclamante (trabalhador): {reclamante}
+- Cliente (empresa representada): {cliente}
 - Data da decisão: {data_decisao}
 - Vara/Turma: {vara_turma}
 - Valor da condenação: {valor_condenacao}
-- Resumo: {resumo}
-- Entendimentos favoráveis: {favoraveis}
-- Entendimentos desfavoráveis: {desfavoraveis}
-- Observações/Precedente: {observacoes}
+- Resumo da decisão: {resumo}
+- Entendimentos favoráveis à empresa: {favoraveis}
+- Entendimentos desfavoráveis à empresa: {desfavoraveis}
+- Observações/uso como precedente: {observacoes}
 
-INSTRUÇÕES PARA O E-MAIL:
-1. Assunto já definido (não altere): {assunto}
-2. Cumprimente o cliente formalmente.
-3. Informe o resultado da decisão de forma clara.
-4. Destaque os principais pontos da decisão.
-5. Explique as estratégias que o escritório adotará a partir desta decisão.
-6. Indique os próximos passos processuais.
-7. Informe o valor da condenação (se houver), as custas processuais estimadas, e o valor do depósito recursal necessário (ou mencione que o juízo já está garantido, se aplicável). Caso não haja condenação (decisão favorável), informe isso claramente.
-8. Finalize de forma profissional, colocando-se à disposição para dúvidas.
+ESTRUTURA OBRIGATÓRIA DO E-MAIL (siga esta ordem):
 
-Retorne APENAS o corpo do e-mail (sem o assunto), em texto corrido, formatado em português formal, sem markdown, sem asteriscos.
-O e-mail deve ter no máximo 400 palavras."""
+1. SAUDAÇÃO FORMAL
+   Prezados Senhores / Prezado(a) [nome do cliente se disponível],
+
+2. APRESENTAÇÃO DO ASSUNTO (1 parágrafo)
+   Informe que o escritório vem, por meio deste, comunicar o resultado da decisão judicial proferida no processo acima referenciado.
+
+3. RESULTADO DA DECISÃO (1–2 parágrafos)
+   Informe claramente se a decisão foi favorável, desfavorável ou parcialmente favorável à empresa.
+   Se favorável: destaque as teses que protegeram a empresa e os pedidos negados ao reclamante.
+   Se desfavorável: explique objetivamente o que foi decidido, sem alarmismo, com clareza sobre os impactos.
+   Se parcialmente favorável: separe as vitórias das condenações.
+
+4. ASPECTOS RELEVANTES (1 parágrafo)
+   Destaque os fundamentos jurídicos principais e os pontos que podem ser úteis como precedente em outros processos.
+
+5. PROVIDÊNCIAS E PRÓXIMOS PASSOS (1 parágrafo)
+   Informe claramente o que o escritório fará: recurso, cumprimento, negociação ou monitoramento.
+   Se houver condenação: mencione o prazo recursal, o valor do depósito recursal necessário (estimado em 50% da condenação) e custas processuais.
+   Se não houver condenação: confirme que não há obrigações financeiras imediatas.
+
+6. ENCERRAMENTO FORMAL
+   Coloque-se à disposição para esclarecimentos, com disponibilidade para reunião se necessário.
+   Finalize com: "Atenciosamente," seguido de linha em branco para assinatura.
+
+REGRAS DE ESCRITA:
+- Português formal e jurídico, sem gírias ou informalidades.
+- Parágrafos bem estruturados, sem listas com marcadores ou asteriscos.
+- Tom seguro, objetivo e profissional — transmitir que a situação está sendo gerenciada com competência.
+- Se a decisão for desfavorável: seja direto mas tranquilizador, ressaltando as medidas que serão tomadas.
+- Se a decisão for favorável: celebre discretamente e reforce a qualidade da defesa.
+- NÃO use markdown, asteriscos, hashtags ou qualquer formatação especial.
+- O e-mail deve ter entre 350 e 500 palavras.
+
+Assunto (já definido, não inclua no corpo): {assunto}
+
+Retorne APENAS o corpo do e-mail, começando pela saudação e terminando em "Atenciosamente,", sem nenhum texto adicional antes ou depois."""
 
 
 def _montar_assunto_email(row: dict) -> str:
@@ -719,6 +835,7 @@ async def dispensar_email_sessao(advogado: str, webhook_url: str):
 async def dispensar_email_sessao_data(advogado: str) -> str:
     """Descarta a oferta de e-mail da sessão confirmada."""
     chave = _chave_sessao(advogado)
+    primeiro = advogado.strip().split()[0]
     chave_email = f"email_{chave}"
     sessoes = await carregar_sessoes()
 
@@ -726,7 +843,7 @@ async def dispensar_email_sessao_data(advogado: str) -> str:
         del sessoes[chave_email]
         await salvar_sessoes(sessoes)
 
-    return f"👍 *{advogado}*, tudo certo! E-mail dispensado."
+    return f"Combinado, {primeiro}! Sem e-mail por enquanto. Qualquer coisa é só chamar! 😊"
 
 
 # ---------------------------------------------------------------------------

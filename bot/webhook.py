@@ -18,10 +18,10 @@ async def send_webhook(webhook_url: str, text: str):
 
 async def send_card(webhook_url: str, card: dict):
     """Posta um card formatado no espaço via Incoming Webhook."""
+    fallback_text = card.pop("_fallback_text", "Erro ao formatar mensagem.")
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(webhook_url, json={"cardsV2": [card]})
     if r.status_code not in (200, 201):
         logger.error("Erro no webhook card [%s]: %s", r.status_code, r.text)
-        # Fallback para texto simples se card falhar
-        await send_webhook(webhook_url, card.get("_fallback_text", "Erro ao formatar mensagem."))
+        await send_webhook(webhook_url, fallback_text)
 

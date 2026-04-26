@@ -560,8 +560,9 @@ async def _processar_pdf_background(
         )
 
         # Envia card com botões via webhook
+        fallback = f"✅ Análise concluída, {advogado}!\n\n{resultado}"
         card = _analysis_webhook_card(advogado, resultado)
-        card["_fallback_text"] = f"✅ Análise concluída, {advogado}!\n\n{resultado}"
+        card["_fallback_text"] = fallback
         await send_card(webhook_url, card)
 
     except Exception as exc:
