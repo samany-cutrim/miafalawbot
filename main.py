@@ -79,7 +79,7 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook, send_card, send_card_with_user_token
+from bot.webhook import send_webhook, send_card, send_card_with_user_token, send_card_with_service_account
 from bot.oauth import get_auth_url, exchange_code, refresh_access_token, get_user_info
 from bot.sheets import salvar_token_oauth, carregar_token_oauth
 
@@ -598,9 +598,27 @@ async def _processar_pdf_background(
         if webhook_url:
             await send_webhook(
                 webhook_url,
-                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
-                f"_Responda @Mia Falaw Bot para confirmar, corrigir ou cancelar._"
+                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}"
             )
+
+        # Envia card de confirmação diretamente via API (sem precisar de @menção)
+        if space_name:
+            card_enviado = await send_card_with_service_account(
+                space_name=space_name,
+                card=_analysis_actions_card(),
+                sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
+            )
+            if not card_enviado and webhook_url:
+                await send_webhook(
+                    webhook_url,
+                    "_Para confirmar, mencione @Mia Falaw Bot no chat._"
+                )
+        elif webhook_url:
+            await send_webhook(
+                webhook_url,
+                "_Para confirmar, mencione @Mia Falaw Bot no chat._"
+            )
+
         logger.info("[BG] Análise enviada via webhook para %s", advogado)
 
     except Exception as exc:
