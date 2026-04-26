@@ -63,7 +63,7 @@ async def _verificar_token_google(request: Request) -> bool:
         return True
 
 
-from bot.config import GITHUB_TOKEN, GOOGLE_SERVICE_ACCOUNT_FILE
+from bot.config import GITHUB_TOKEN, GOOGLE_SERVICE_ACCOUNT_FILE, WEBHOOK_URL
 from bot.handlers import (
     cancelar_sessao_data,
     confirmar_sessao_data,
@@ -603,6 +603,25 @@ async def _download_pdf_chat(resource_name: str) -> bytes | None:
 
 
 # ---------------------------------------------------------------------------
+# SAUDAÇÃO PERSONALIZADA POR HORÁRIO (fuso Brasília)
+# ---------------------------------------------------------------------------
+
+def _saudacao_personalizada(nome: str) -> str:
+    """Retorna saudação por horário + primeiro nome da pessoa."""
+    from datetime import datetime as _dt, timezone, timedelta
+    tz_brasilia = timezone(timedelta(hours=-3))
+    hora = _dt.now(tz_brasilia).hour
+    if 6 <= hora < 12:
+        saudacao = "Bom dia"
+    elif 12 <= hora < 18:
+        saudacao = "Boa tarde"
+    else:
+        saudacao = "Boa noite"
+    primeiro = (nome or "Advogado").strip().split()[0]
+    return f"{saudacao}, {primeiro}! Selecione uma opção:"
+
+
+# ---------------------------------------------------------------------------
 # HANDLER — MENSAGEM DE TEXTO
 # ---------------------------------------------------------------------------
 
@@ -646,15 +665,11 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                     "⚠️ Não consegui identificar o arquivo PDF. Tente enviar novamente."
                 )
 
-            # Obtém webhook URL da sessão para resposta assíncrona
-            sessoes = await carregar_sessoes()
-            chave = advogado.strip().lower().split()[0] if advogado else "advogado"
-            webhook_url = (sessoes.get(chave) or {}).get("_webhook_url") or ""
-
+            # Usa WEBHOOK_URL do env (variável no Render)
+            webhook_url = WEBHOOK_URL
             if not webhook_url:
-                # Tenta pegar do espaço do evento
                 space_name = (msg_obj.get("space") or {}).get("name") or ""
-                logger.warning("[PDF] Webhook URL não encontrado para %s (space: %s)", advogado, space_name)
+                logger.warning("[PDF] WEBHOOK_URL não configurado para %s (space: %s)", advogado, space_name)
 
             # Dispara análise em background — resposta imediata para o Chat
             background_tasks.add_task(
@@ -736,8 +751,8 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         msg = await dispensar_email_sessao_data(advogado)
         return _new_message_text(msg)
 
-    # Qualquer outra mensagem → home card
-    return _message_text_and_cards("Olá! Selecione uma opção:", [_home_card()])
+    # Qualquer outra mensagem → saudação personalizada + home card
+    return _message_text_and_cards(_saudacao_personalizada(advogado), [_home_card()])
 
 
 # ---------------------------------------------------------------------------

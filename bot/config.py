@@ -7,6 +7,7 @@ import tempfile
 
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
+WEBHOOK_URL       = os.environ.get("WEBHOOK_URL", "")
 
 _sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 if _sa_json:
