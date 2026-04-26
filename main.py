@@ -587,14 +587,24 @@ async def _handle_message(event: dict) -> dict:
                 logger.info("[PDF] userOAuthToken presente: %s", bool(user_oauth_token))
 
                 if not user_oauth_token:
-                    # Token ausente: usuário ainda não autorizou os escopos do Add-on.
-                    # Retorna mensagem pedindo para remover e readicionar o bot.
-                    logger.warning("[PDF] userOAuthToken ausente — usuário não autorizou escopos")
-                    return _message_text_response(
-                        "⚠️ Para analisar PDFs, preciso de autorização.\n\n"
-                        "Por favor, remova o bot deste espaço e adicione novamente — "
-                        "na tela de instalação, aceite todas as permissões solicitadas."
-                    )
+                    # Token ausente: retorna requesting_google_scopes para forçar
+                    # tela de autorização OAuth do Add-on.
+                    # O Google Chat re-executa o evento automaticamente após autorização.
+                    logger.warning("[PDF] userOAuthToken ausente — retornando requesting_google_scopes")
+                    return {
+                        "hostAppDataAction": {
+                            "chatDataAction": {
+                                "createMessageAction": {
+                                    "message": {
+                                        "text": "🔐 Autorização necessária para analisar PDFs. Clique em Autorizar e reenvie o PDF."
+                                    }
+                                }
+                            }
+                        },
+                        "requesting_google_scopes": {
+                            "all_scopes": True
+                        }
+                    }
 
                 logger.info("[PDF] Baixando com userOAuthToken: %s", _download_url[:100])
                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
