@@ -377,8 +377,6 @@ def _analysis_actions_card(analysis_text: str) -> dict:
             "sections": [
                 {
                     "header": "📋 Relatório da Decisão",
-                    "collapsible": True,
-                    "uncollapsibleWidgetsCount": 2,
                     "widgets": [
                         {"textParagraph": {"text": _as_html(analysis_text)}},
                     ],
@@ -588,7 +586,8 @@ async def _processar_pdf_background(
         if webhook_url:
             await send_webhook(
                 webhook_url,
-                f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
+                f"✅ *Análise concluída, {primeiro}!*\n"
+                f"_Mencione *@Mia Falaw Bot* no chat para ver o card completo e confirmar a decisão._"
             )
 
     except Exception as exc:

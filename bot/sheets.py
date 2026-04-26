@@ -42,7 +42,14 @@ def _aba_precedentes(sh):
 
 def _salvar_sync(row: dict):
     sh = _client().open_by_key(SPREADSHEET_ID)
-    valores = [row.get(col, "") for col in COLUNAS]
+    valores = []
+    for col in COLUNAS:
+        v = row.get(col, "")
+        if isinstance(v, list):
+            v = "\n".join(str(i) for i in v)
+        elif v is None:
+            v = ""
+        valores.append(str(v) if not isinstance(v, str) else v)
 
     ws = _aba_precedentes(sh)
     ws.append_row(valores, value_input_option="USER_ENTERED")
