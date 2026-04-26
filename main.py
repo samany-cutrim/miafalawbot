@@ -79,7 +79,7 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook, send_card, send_interactive_card, send_card_with_user_token
+from bot.webhook import send_webhook, send_card, send_card_with_user_token
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -584,17 +584,8 @@ async def _processar_pdf_background(
             tipo_responsabilidade=tipo,
         )
 
-        # Tenta enviar card interativo via Chat REST API (Service Account)
-        # Funciona apenas se o app estiver configurado como Chat App no Google Cloud Console.
         primeiro = advogado.strip().split()[0]
-        card = _analysis_actions_card(resultado)
-        enviado = await send_interactive_card(
-            space_name=space_name,
-            card=card,
-            sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
-            fallback_text=resultado,
-        )
-        if not enviado and webhook_url:
+        if webhook_url:
             # Fallback: envia a análise completa como texto para o usuário ler imediatamente.
             # Os botões de confirmar/cancelar ficam disponíveis ao mencionar @Mia Falaw Bot.
             await send_webhook(
