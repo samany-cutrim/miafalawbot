@@ -577,32 +577,46 @@ async def _handle_message(event: dict) -> dict:
                 if not resource_name:
                     return _message_text_response("⚠️ Não consegui identificar o arquivo. Tente enviar o PDF novamente.")
 
-                from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
-                from google.oauth2 import service_account
-                import google.auth.transport.requests as _ga_requests
-
-                _creds = service_account.Credentials.from_service_account_file(
-                    GOOGLE_SERVICE_ACCOUNT_FILE,
-                    scopes=["https://www.googleapis.com/auth/chat.bot"]
-                )
-                _auth_req = _ga_requests.Request()
-                _creds.refresh(_auth_req)
-                _token = _creds.token
+                # Usa userOAuthToken do evento (token do usuário logado no Add-on).
+                # Esse token tem permissão chat.messages.readonly e consegue baixar
+                # anexos do Chat sem precisar de Chat App nativo registrado no GCP.
+                auth_event_obj = event.get("authorizationEventObject") or {}
+                user_oauth_token = auth_event_obj.get("userOAuthToken") or ""
 
                 _download_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
-                logger.info("[PDF] Baixando via httpx: %s", _download_url[:120])
+                logger.info("[PDF] userOAuthToken presente: %s", bool(user_oauth_token))
 
+                if not user_oauth_token:
+                    # Token ausente: usuário ainda não autorizou os escopos do Add-on.
+                    # Retorna mensagem pedindo para remover e readicionar o bot.
+                    logger.warning("[PDF] userOAuthToken ausente — usuário não autorizou escopos")
+                    return _message_text_response(
+                        "⚠️ Para analisar PDFs, preciso de autorização.\n\n"
+                        "Por favor, remova o bot deste espaço e adicione novamente — "
+                        "na tela de instalação, aceite todas as permissões solicitadas."
+                    )
+
+                logger.info("[PDF] Baixando com userOAuthToken: %s", _download_url[:100])
                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
                     _resp = await _client.get(
                         _download_url,
-                        headers={"Authorization": f"Bearer {_token}"}
+                        headers={"Authorization": f"Bearer {user_oauth_token}"}
+                    )
+
+                logger.info("[PDF] Status download: %s", _resp.status_code)
+
+                if _resp.status_code == 401 or _resp.status_code == 403:
+                    logger.error("[PDF] Token sem permissão (%s)", _resp.status_code)
+                    return _message_text_response(
+                        "⚠️ Sem permissão para baixar o PDF.\n\n"
+                        "Remova o bot deste espaço e adicione novamente para reautorizar."
                     )
 
                 if _resp.status_code != 200:
                     logger.error("[PDF] Erro HTTP %s: %s", _resp.status_code, _resp.text[:300])
                     return _message_text_response(
-                        "⚠️ PDF não pôde ser baixado automaticamente.\n\n"
-                        "Use o botão *Enviar decisão* no menu e cole o texto da decisão no campo indicado."
+                        "⚠️ PDF não pôde ser baixado (HTTP " + str(_resp.status_code) + ").\n\n"
+                        "Use o botão *Enviar decisão* no menu e cole o texto da decisão."
                     )
 
                 pdf_bytes = _resp.content
@@ -619,7 +633,7 @@ async def _handle_message(event: dict) -> dict:
                 logger.exception("[MESSAGE] erro ao processar PDF: %s", exc)
                 return _message_text_response(
                     "⚠️ Não foi possível processar o PDF.\n\n"
-                    "Use o botão *Enviar decisão* no menu e cole o texto da decisão no campo indicado."
+                    "Use o botão *Enviar decisão* no menu e cole o texto da decisão."
                 )
         else:
             # Sem PDF — lembra o usuário
