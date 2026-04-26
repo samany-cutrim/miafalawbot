@@ -579,42 +579,34 @@ async def _handle_message(event: dict) -> dict:
 
                 from bot.config import GOOGLE_SERVICE_ACCOUNT_FILE
                 from google.oauth2 import service_account
-                import google.auth.transport.requests
-                import httpx as _httpx
-                from googleapiclient.discovery import build
-                from googleapiclient.http import MediaIoBaseDownload
-                import io as _io
+                import google.auth.transport.requests as _ga_requests
 
-                creds = service_account.Credentials.from_service_account_file(
+                _creds = service_account.Credentials.from_service_account_file(
                     GOOGLE_SERVICE_ACCOUNT_FILE,
                     scopes=["https://www.googleapis.com/auth/chat.bot"]
                 )
+                _auth_req = _ga_requests.Request()
+                _creds.refresh(_auth_req)
+                _token = _creds.token
 
-                # Usa googleapiclient para download correto
-                chat_service = build("chat", "v1", credentials=creds)
+                _download_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
+                logger.info("[PDF] Baixando via httpx: %s", _download_url[:120])
 
-                # Primeiro busca o attachment para obter resourceName atualizado
-                attachment_name_full = pdf_attachment.get("name") or ""
-                if attachment_name_full:
-                    try:
-                        att_meta = chat_service.spaces().messages().attachments().get(
-                            name=attachment_name_full
-                        ).execute()
-                        data_ref = att_meta.get("attachmentDataRef") or {}
-                        resource_name = data_ref.get("resourceName") or resource_name
-                        logger.info("[PDF] resourceName atualizado: %s", resource_name[:80])
-                    except Exception as e:
-                        logger.warning("[PDF] Não conseguiu buscar metadata: %s", e)
+                async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _client:
+                    _resp = await _client.get(
+                        _download_url,
+                        headers={"Authorization": f"Bearer {_token}"}
+                    )
 
-                # Download via media API
-                request = chat_service.media().download_media(resourceName=resource_name)
-                file_buf = _io.BytesIO()
-                downloader = MediaIoBaseDownload(file_buf, request)
-                done = False
-                while not done:
-                    _, done = downloader.next_chunk()
-                pdf_bytes = file_buf.getvalue()
+                if _resp.status_code != 200:
+                    logger.error("[PDF] Erro HTTP %s: %s", _resp.status_code, _resp.text[:300])
+                    return _message_text_response(
+                        "⚠️ PDF não pôde ser baixado automaticamente.\n\n"
+                        "Use o botão *Enviar decisão* no menu e cole o texto da decisão no campo indicado."
+                    )
 
+                pdf_bytes = _resp.content
+                logger.info("[PDF] Download OK — %d bytes", len(pdf_bytes))
                 texto_pdf = extrair_texto_pdf(pdf_bytes)
                 resultado = await processar_texto_chat(
                     texto_pdf=texto_pdf,
@@ -625,7 +617,10 @@ async def _handle_message(event: dict) -> dict:
                 return _message_text_and_cards("Análise concluída:", [_analysis_actions_card(resultado)])
             except Exception as exc:
                 logger.exception("[MESSAGE] erro ao processar PDF: %s", exc)
-                return _message_text_response("⚠️ Erro ao processar o PDF. Tente novamente.")
+                return _message_text_response(
+                    "⚠️ Não foi possível processar o PDF.\n\n"
+                    "Use o botão *Enviar decisão* no menu e cole o texto da decisão no campo indicado."
+                )
         else:
             # Sem PDF — lembra o usuário
             return _message_text_and_cards(
