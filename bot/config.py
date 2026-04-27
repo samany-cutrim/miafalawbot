@@ -6,7 +6,6 @@ import json
 import tempfile
 
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
-GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
 WEBHOOK_URL       = os.environ.get("WEBHOOK_URL", "")
 APPS_SCRIPT_DOPOST_URL = os.environ.get("APPS_SCRIPT_DOPOST_URL", "")
