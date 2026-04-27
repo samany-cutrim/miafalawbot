@@ -13,6 +13,9 @@ from bot.config import SPREADSHEET_ID, COLUNAS
 
 logger = logging.getLogger(__name__)
 
+# Fallback em memória para não perder fluxo quando o Sheets estiver indisponível.
+_SESSOES_CACHE: dict = {}
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
@@ -79,14 +82,16 @@ SESSOES_ABA = "_sessoes_pendentes"
 
 
 def _carregar_sessoes_sync() -> dict:
+    global _SESSOES_CACHE
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
         try:
             ws = sh.worksheet(SESSOES_ABA)
         except gspread.WorksheetNotFound:
-            return {}
+            return dict(_SESSOES_CACHE)
         dados = ws.get_all_values()
         if len(dados) < 2:
+            _SESSOES_CACHE = {}
             return {}
         # Linha 1 = headers, demais = dados
         # Formato: chave | json_dados
@@ -97,13 +102,15 @@ def _carregar_sessoes_sync() -> dict:
                     sessoes[row[0]] = json.loads(row[1])
                 except Exception:
                     pass
+        _SESSOES_CACHE = dict(sessoes)
         return sessoes
     except Exception as e:
-        logger.warning("Erro ao carregar sessões do Sheets: %s", e)
-        return {}
+        logger.warning("Erro ao carregar sessões do Sheets: %r", e)
+        return dict(_SESSOES_CACHE)
 
 
 def _salvar_sessoes_sync(sessoes: dict):
+    global _SESSOES_CACHE
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
         try:
@@ -119,9 +126,12 @@ def _salvar_sessoes_sync(sessoes: dict):
         ws.clear()
         if rows:
             ws.update("A1", rows)
+        _SESSOES_CACHE = dict(sessoes)
         logger.info("Sessões salvas no Sheets: %d", len(sessoes))
     except Exception as e:
-        logger.warning("Erro ao salvar sessões no Sheets: %s", e)
+        # Mantém cache local para não quebrar o fluxo do chat em caso de falha do Sheets.
+        _SESSOES_CACHE = dict(sessoes)
+        logger.warning("Erro ao salvar sessões no Sheets: %r", e)
 
 
 async def carregar_sessoes() -> dict:
