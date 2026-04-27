@@ -32,7 +32,7 @@ function doPost(e) {
       }
       try {
         var token = ScriptApp.getOAuthToken();
-        var dlUrl = "https://chat.googleapis.com/v1/" + resourceName + "?alt=media";
+        var dlUrl = "https://chat.googleapis.com/v1/media/" + resourceName + "?alt=media";
         var dlResp = UrlFetchApp.fetch(dlUrl, {
           headers: { "Authorization": "Bearer " + token },
           muteHttpExceptions: true
