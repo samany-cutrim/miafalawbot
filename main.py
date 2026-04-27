@@ -560,6 +560,45 @@ async def _get_hints_pdf(advogado: str) -> tuple[str, str]:
 # Roda fora do ciclo de request/response, envia resultado via Webhook
 # ---------------------------------------------------------------------------
 
+async def _loop_keep_alive(webhook_url: str, stop_event: asyncio.Event):
+    """Envia mensagens periódicas enquanto o processamento estiver em andamento.
+    1ª mensagem: neutra (imediata).
+    Seguintes: engraçadas, a cada 18s — até stop_event ser acionado.
+    """
+    import random as _random
+    _frases_engracacadas = [
+        "⚖️ Eita, essa decisão é pesada... já já chego com a análise!",
+        "🧠 A Mia tá quebrando a cabeça aqui... segura a ansiedade!",
+        "📜 Lendo cada vírgula dessa decisão. Quase lá!",
+        "☕ Tomando um cafezinho jurídico enquanto analiso... já volto!",
+        "🤔 Putz, que decisão complicada. Um segundo a mais, por favor!",
+        "⏳ Ainda aqui! Só terminando de discutir com o juiz virtual...",
+        "🔍 Investigando os fundamentos com lupa. Quase pronto!",
+    ]
+    # 1ª mensagem: neutra e imediata
+    try:
+        await send_webhook(webhook_url, "⏳ Aguarde, estou analisando a decisão...")
+    except Exception:
+        pass
+    # Loop: envia engraçadas a cada 18s até o processamento terminar
+    frases = _frases_engracacadas.copy()
+    _random.shuffle(frases)
+    idx = 0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(stop_event.wait())), timeout=18.0)
+            break  # stop_event foi acionado
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            await send_webhook(webhook_url, frases[idx % len(frases)])
+        except Exception:
+            pass
+        idx += 1
+
+
 async def _enviar_keep_alive(webhook_url: str, mensagem: str, delay: float = 15.0):
     """Aguarda `delay` segundos e envia mensagem de keep-alive via webhook."""
     await asyncio.sleep(delay)
@@ -651,34 +690,8 @@ async def _processar_pdf_background(
 
 
 async def _download_pdf_chat(resource_name: str) -> bytes | None:
-    """Baixa PDF via SA token (chat.bot). Fallback: Apps Script."""
-    # Tentativa 1: Service Account com escopo chat.bot
-    try:
-        from google.oauth2 import service_account
-        import google.auth.transport.requests as _ga_requests
-
-        _creds = service_account.Credentials.from_service_account_file(
-            GOOGLE_SERVICE_ACCOUNT_FILE,
-            scopes=["https://www.googleapis.com/auth/chat.bot"]
-        )
-        _auth_req = _ga_requests.Request()
-        _creds.refresh(_auth_req)
-        _token = _creds.token
-
-        _url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
-        logger.info("[PDF] Tentando download SA: %s", _url[:100])
-
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
-            resp = await cli.get(_url, headers={"Authorization": f"Bearer {_token}"})
-
-        if resp.status_code == 200:
-            logger.info("[PDF] Download SA OK — %d bytes", len(resp.content))
-            return resp.content
-        logger.warning("[PDF] SA falhou (%s) — tentando Apps Script", resp.status_code)
-    except Exception as e:
-        logger.warning("[PDF] Erro SA: %s — tentando Apps Script", e)
-
-    # Tentativa 2: Apps Script como proxy
+    """Baixa PDF via Apps Script como proxy."""
+    # Apps Script como proxy (SA não tem permissão para baixar anexos de chat)
     try:
         import base64 as _b64
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
@@ -777,21 +790,10 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
             primeiro = advogado.strip().split()[0]
 
             # Envia mensagem engraçada via webhook imediatamente (keep-alive enquanto IA processa)
+            # Inicia loop de keep-alive via webhook (mantém sessão viva durante o processamento)
+            _keep_alive_stop = asyncio.Event()
             if WEBHOOK_URL:
-                import random as _random
-                _frases_espera = [
-                    "⚖️ Eita, essa decisão é pesada... já já chego com a análise!",
-                    "🧠 A Mia tá quebrando a cabeça aqui... segura a ansiedade!",
-                    "📜 Lendo cada vírgula dessa decisão. Quase lá!",
-                    "☕ Tomando um cafezinho jurídico enquanto analiso... já volto!",
-                    "🤔 Putz, que decisão complicada. Um segundo a mais, por favor!",
-                    "⏳ Ainda aqui! Só terminando de discutir com o juiz virtual...",
-                    "🔍 Investigando os fundamentos com lupa. Quase pronto!",
-                ]
-                try:
-                    await send_webhook(WEBHOOK_URL, _random.choice(_frases_espera))
-                except Exception:
-                    pass
+                asyncio.create_task(_loop_keep_alive(WEBHOOK_URL, _keep_alive_stop))
 
             # Tenta processar sincronamente (dentro do timeout de 30s do Chat)
             # Cards retornados como resposta a evento sempre funcionam com botões
@@ -817,9 +819,11 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                 )
 
                 logger.info("[PDF] Processamento síncrono OK para %s", advogado)
+                _keep_alive_stop.set()
                 return _new_message_cards([_analysis_webhook_card(primeiro, resultado)])
 
             except Exception as e:
+                _keep_alive_stop.set()
                 logger.warning("[PDF] Processamento síncrono falhou (%s) — usando background task", e)
                 background_tasks.add_task(
                     _processar_pdf_background,
