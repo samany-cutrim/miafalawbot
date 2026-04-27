@@ -594,28 +594,24 @@ async def _processar_pdf_background(
 
         primeiro = advogado.strip().split()[0]
 
-        # Envia análise como texto via webhook
-        if webhook_url:
-            await send_webhook(
-                webhook_url,
-                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}"
-            )
-
-        # Envia card de confirmação diretamente via API (sem precisar de @menção)
+        # Envia card único com análise + botões (sem duplicar em texto puro)
         if space_name:
             card_enviado = await send_card_with_service_account(
                 space_name=space_name,
-                card=_analysis_actions_card(),
+                card=_analysis_webhook_card(primeiro, resultado),
                 sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
             )
             if not card_enviado and webhook_url:
+                # Fallback: texto + instrução de @menção
                 await send_webhook(
                     webhook_url,
+                    f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
                     "_Para confirmar, mencione @Mia Falaw Bot no chat._"
                 )
         elif webhook_url:
             await send_webhook(
                 webhook_url,
+                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
                 "_Para confirmar, mencione @Mia Falaw Bot no chat._"
             )
 
