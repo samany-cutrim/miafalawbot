@@ -870,8 +870,7 @@ async def obter_relatorio_pendente(advogado: str) -> str | None:
 
 PROMPT_EMAIL = """Você é um advogado sênior especializado em direito trabalhista brasileiro, responsável pela comunicação com clientes empresariais.
 
-Redija um e-mail corporativo de reporte de decisão judicial para o cliente, com base nos dados abaixo.
-O escritório representa SEMPRE a empresa (reclamada/ré). O cliente é o gestor jurídico ou diretor da empresa.
+Redija um e-mail corporativo estruturado seguindo EXATAMENTE o formato dos templates profissionais da firma.
 
 DADOS DA DECISÃO:
 - Tipo de decisão: {tipo_decisao}
@@ -885,46 +884,49 @@ DADOS DA DECISÃO:
 - Resumo da decisão: {resumo}
 - Entendimentos favoráveis à empresa: {favoraveis}
 - Entendimentos desfavoráveis à empresa: {desfavoraveis}
-- Observações/uso como precedente: {observacoes}
 
-ESTRUTURA OBRIGATÓRIA DO E-MAIL (siga esta ordem):
+ESTRUTURA OBRIGATÓRIA (exatamente nesta ordem):
 
-1. SAUDAÇÃO FORMAL
-   Prezados Senhores / Prezado(a) [nome do cliente se disponível],
+1. SAUDAÇÃO
+Olá, Pessoal.
 
-2. APRESENTAÇÃO DO ASSUNTO (1 parágrafo)
-   Informe que o escritório vem, por meio deste, comunicar o resultado da decisão judicial proferida no processo acima referenciado.
+Tudo bem?
 
-3. RESULTADO DA DECISÃO (1–2 parágrafos)
-   Informe claramente se a decisão foi favorável, desfavorável ou parcialmente favorável à empresa.
-   Se favorável: destaque as teses que protegeram a empresa e os pedidos negados ao reclamante.
-   Se desfavorável: explique objetivamente o que foi decidido, sem alarmismo, com clareza sobre os impactos.
-   Se parcialmente favorável: separe as vitórias das condenações.
+2. METADATA (cada linha em negrito, seguindo padrão: *Label:* Valor)
+*Processo:* {numero_processo}
+*Reclamante:* {reclamante}
+*Cliente:* {cliente}
+*Vara/Turma:* {vara_turma}
 
-4. ASPECTOS RELEVANTES (1 parágrafo)
-   Destaque os fundamentos jurídicos principais e os pontos que podem ser úteis como precedente em outros processos.
+3. RESUMO
+*Resumo:*
+[Parágrafo resumindo a decisão: favorável/desfavorável/parcial para a empresa]
 
-5. PROVIDÊNCIAS E PRÓXIMOS PASSOS (1 parágrafo)
-   Informe claramente o que o escritório fará: recurso, cumprimento, negociação ou monitoramento.
-   Se houver condenação: mencione o prazo recursal, o valor do depósito recursal necessário (estimado em 50% da condenação) e custas processuais.
-   Se não houver condenação: confirme que não há obrigações financeiras imediatas.
+4. FAVORÁVEIS
+*Favoráveis (para a empresa):*
+[Numerada lista 1-5+ com formato: 1. *Tópico:* descrição]
 
-6. ENCERRAMENTO FORMAL
-   Coloque-se à disposição para esclarecimentos, com disponibilidade para reunião se necessário.
-   Finalize com: "Atenciosamente," seguido de linha em branco para assinatura.
+5. DESFAVORÁVEIS (se houver)
+*Desfavoráveis (para a empresa):*
+[Numerada lista com mesmo formato acima]
 
-REGRAS DE ESCRITA:
-- Português formal e jurídico, sem gírias ou informalidades.
-- Parágrafos bem estruturados, sem listas com marcadores ou asteriscos.
-- Tom seguro, objetivo e profissional — transmitir que a situação está sendo gerenciada com competência.
-- Se a decisão for desfavorável: seja direto mas tranquilizador, ressaltando as medidas que serão tomadas.
-- Se a decisão for favorável: celebre discretamente e reforce a qualidade da defesa.
-- NÃO use markdown, asteriscos, hashtags ou qualquer formatação especial.
-- O e-mail deve ter entre 350 e 500 palavras.
+6. ENCERRAMENTO
+Atenciosamente,
 
-Assunto (já definido, não inclua no corpo): {assunto}
+FORMATO DE LISTAS:
+- Use números (1, 2, 3...) seguido de ponto e espaço
+- Cada item começa com *Tópico em negrito:* seguido de descrição
+- Um item por linha
 
-Retorne APENAS o corpo do e-mail, começando pela saudação e terminando em "Atenciosamente,", sem nenhum texto adicional antes ou depois."""
+REGRAS:
+- Use *asteriscos* para negrito: *texto* = negrito
+- Cada seção em linha separada
+- Português formal, profissional
+- Descreva apenas os fundamentos principais
+- Se favorável: celebre discretamente a qualidade da defesa
+- Se desfavorável: seja objetivo e tranquilizador
+
+Retorne APENAS o corpo do e-mail neste formato exato, começando em "Olá, Pessoal." e terminando em "Atenciosamente,"."""
 
 
 def _montar_assunto_email(row: dict) -> str:
@@ -951,7 +953,8 @@ async def gerar_email_sessao(advogado: str, webhook_url: str):
 def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
     """
     Formata o corpo do e-mail com HTML estruturado.
-    Segue o padrão dos exemplos: metadata em negrito, seções com títulos, estrutura clara.
+    Processa formato com *asteriscos* para negrito e estrutura de listas numeradas.
+    Segue padrão dos templates profissionais da firma.
     """
     html = "<b>📧 SUGESTÃO DE E-MAIL</b><br><br>"
     
@@ -963,47 +966,50 @@ def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
     html += "<b>Data da decisão:</b> " + row.get("DATA DA DECISÃO", "N/A") + "<br>"
     
     valor = row.get("VALOR DA CONDENAÇÃO", "N/A")
-    if valor and valor != "N/A":
+    if valor and valor != "N/A" and valor.strip():
         html += "<b>Valor:</b> " + valor + "<br>"
     
     html += "<br><b>───────────────────────────────────────────</b><br><br>"
     
-    # Corpo do e-mail formatado
-    # Procura por linhas que começam com ** (títulos) e as formata como headers
+    # Processa linhas do corpo do email
     lines = corpo_email.split('\n')
-    in_bullet_list = False
-    
-    for line in lines:
+    for i, line in enumerate(lines):
         stripped = line.strip()
         
-        # Pula linhas vazias
+        # Pula linhas vazias mantendo espaçamento
         if not stripped:
-            html += "<br>"
+            if i > 0 and i < len(lines) - 1:  # Não adiciona br no final
+                html += "<br>"
             continue
         
-        # Remove asteriscos (markdown) e formata como seção
-        if stripped.startswith('**') and stripped.endswith('**'):
-            # Fechamos lista de bullets anterior se houver
-            in_bullet_list = False
-            # Títulos em vermelho e negrito (estilo dos exemplos)
-            titulo = stripped.replace('**', '').strip().replace(':', '')
-            html += f'<font color="#ff0000"><b>{titulo}:</b></font><br>'
-        elif stripped.startswith('- '):
-            # Bullet points
-            in_bullet_list = True
-            item = stripped[2:].strip()
-            html += f"• {item}<br>"
-        elif stripped.startswith('* '):
-            # Bullet points alternativos
-            in_bullet_list = True
-            item = stripped[2:].strip()
-            html += f"• {item}<br>"
+        # Seções em negrito com asteriscos: *Seção:* → <b>Seção:</b>
+        if stripped.startswith('*') and stripped.endswith('*'):
+            # Remove asteriscos
+            titulo = stripped.replace('*', '').strip()
+            html += f'<b>{titulo}</b><br>'
+        elif re.match(r'^\*[^*]+:\*', stripped):
+            # Formato: *Label:* valor → <b>Label:</b> valor
+            # Substitui *texto:* por <b>texto:</b>
+            formatted = stripped
+            # Encontra e substitui *...:* por <b>...</b>
+            formatted = re.sub(r'\*([^*]+):\*', r'<b>\1:</b>', formatted)
+            # Se houver mais asteriscos (conteúdo em negrito dentro), substitui
+            formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
+            html += f'{formatted}<br>'
+        elif re.match(r'^\d+\.\s', stripped):
+            # Itens numerados: 1. *Tópico:* descrição
+            # Substitui *...:* por <b>...</b> e mantém numeração
+            formatted = stripped
+            formatted = re.sub(r'\*([^*]+):\*', r'<b>\1:</b>', formatted)
+            # Se houver mais asteriscos, substitui por bold
+            formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
+            html += f'{formatted}<br>'
         else:
-            # Parágrafo normal
-            in_bullet_list = False
-            # Remove asteriscos simples (negrito markdown) e converte para <b>
-            line_formatted = stripped.replace('*', '')
-            html += f"{line_formatted}<br>"
+            # Parágrafo normal com possível negrito
+            formatted = stripped
+            # Substitui *texto* por <b>texto</b>
+            formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
+            html += f'{formatted}<br>'
     
     html += "<br><b>───────────────────────────────────────────</b><br><br>"
     html += f"<b>Assunto:</b><br><i>{assunto}</i><br><br>"
