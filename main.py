@@ -792,47 +792,20 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
             thread_name = (msg_obj.get("thread") or {}).get("name") or ""
             primeiro = advogado.strip().split()[0]
 
-            # Tenta processar sincronamente (dentro do timeout de 30s do Chat)
-            # Cards retornados como resposta a evento sempre funcionam com botões
-            try:
-                pdf_bytes = await asyncio.wait_for(
-                    _download_pdf_chat(resource_name), timeout=10.0
-                )
-                if not pdf_bytes:
-                    raise ValueError("PDF vazio")
-
-                texto_pdf = extrair_texto_pdf(pdf_bytes)
-                if not texto_pdf or len(texto_pdf.strip()) < 50:
-                    raise ValueError("Texto extraído vazio")
-
-                resultado = await asyncio.wait_for(
-                    processar_texto_chat(
-                        texto_pdf=texto_pdf,
-                        advogado=advogado,
-                        cliente=cliente,
-                        tipo_responsabilidade=tipo,
-                    ),
-                    timeout=22.0,
-                )
-
-                logger.info("[PDF] Processamento síncrono OK para %s", advogado)
-                return _new_message_cards([_analysis_result_card(primeiro, resultado)])
-
-            except Exception as e:
-                logger.warning("[PDF] Processamento síncrono falhou (%s) — usando background task", e)
-                background_tasks.add_task(
-                    _processar_pdf_background,
-                    resource_name=resource_name,
-                    advogado=advogado,
-                    cliente=cliente,
-                    tipo=tipo,
-                    space_name=space_name,
-                    thread_name=thread_name,
-                )
-                return _new_message_text(
-                    f"⏳ *Analisando decisão, {primeiro}...* \n"
-                    f"_A análise está demorando mais que o esperado. O resultado será enviado em breve._"
-                )
+            background_tasks.add_task(
+                _processar_pdf_background,
+                resource_name=resource_name,
+                advogado=advogado,
+                cliente=cliente,
+                tipo=tipo,
+                space_name=space_name,
+                thread_name=thread_name,
+            )
+            logger.info("[PDF] PDF encaminhado para processamento assíncrono: %s", advogado)
+            return _new_message_text(
+                f"⏳ Analisando decisão, {primeiro}...\n"
+                f"O resultado será enviado nesta conversa em instantes."
+            )
         else:
             # Sem PDF — lembra o usuário
             return _new_message_text(
