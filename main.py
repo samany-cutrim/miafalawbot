@@ -765,7 +765,8 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
         ok, msg = await corrigir_sessao_data(advogado, instrucao)
         if not ok:
             return _new_message_text(msg)
-        return _message_text_and_cards(msg, [_analysis_actions_card()])
+        primeiro = advogado.strip().split()[0] if advogado else "Advogado"
+        return _new_message_cards([_analysis_result_card(primeiro, msg)])
 
     # Aguardando PDF — verifica se há anexo PDF na mensagem
     if await _esta_aguardando_pdf(advogado):
