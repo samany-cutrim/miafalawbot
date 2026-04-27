@@ -725,24 +725,34 @@ async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
     row = sessoes.get(chave)
     if not row:
         return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para confirmar. Que tal enviar um novo PDF? 😊", False
+    
+    # Limpa a sessão pendente (importante: mesmo que o salvamento falhe, não queremos ficar em loop)
+    dados_email = {k: v for k, v in row.items()}
+    del sessoes[chave]
+    chave_email = f"email_{chave}"
+    sessoes[chave_email] = dados_email
+    await salvar_sessoes(sessoes)
+    
+    row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
+    
     try:
-        row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
         await salvar_decisao(row_limpo)
+        sucesso_sheets = True
+        logger.info("Decisão salva na Sheets para %s", advogado)
+    except PermissionError as e:
+        sucesso_sheets = False
+        logger.warning("PermissionError ao salvar na Sheets (API não habilitada?): %s", e)
+    except Exception as e:
+        sucesso_sheets = False
+        logger.exception("Erro ao salvar na Sheets: %s", e)
 
-        # Preserva os dados da decisão para possível geração de e-mail
-        dados_email = {k: v for k, v in row.items()}
-        del sessoes[chave]
-
-        # Armazena estado aguardando resposta de e-mail
-        chave_email = f"email_{chave}"
-        sessoes[chave_email] = dados_email
-        await salvar_sessoes(sessoes)
-
-        sigla = row.get("ADVOGADO", advogado)
-        processo = row.get('NÚMERO DO PROCESSO', 'N/A')
-        cliente = row.get('CLIENTE', 'N/A')
-        resultado = row.get('RESULTADO DA DECISÃO', 'N/A')
-        logger.info("Sessão confirmada para %s", advogado)
+    sigla = row.get("ADVOGADO", advogado)
+    processo = row.get('NÚMERO DO PROCESSO', 'N/A')
+    cliente = row.get('CLIENTE', 'N/A')
+    resultado = row.get('RESULTADO DA DECISÃO', 'N/A')
+    logger.info("Sessão confirmada para %s (Sheets: %s)", advogado, sucesso_sheets)
+    
+    if sucesso_sheets:
         return (
             f"🎉 Perfeito, {primeiro}! Decisão registrada com sucesso na planilha!\n\n"
             f"📄 *Processo:* {processo}\n"
@@ -752,9 +762,16 @@ async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
             f"Agora, que tal gerar uma sugestão de e-mail para o cliente? ✉️",
             True,
         )
-    except Exception as e:
-        logger.exception("Erro ao salvar sessão: %s", e)
-        return f"Ops, {primeiro}! Tive um probleminha ao salvar na planilha. Erro: `{type(e).__name__}: {str(e)[:150]}`\n\nPode tentar confirmar novamente? 🙏", False
+    else:
+        return (
+            f"⚠️ Análise registrada (em memória), mas não pude salvar na planilha.\n\n"
+            f"📄 *Processo:* {processo}\n"
+            f"🏢 *Cliente:* {cliente}\n"
+            f"📊 *Resultado:* {resultado}\n\n"
+            f"_Motivo: Sheets API não habilitada no projeto. Peça ao admin para habilitar em: https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=98905599157_\n\n"
+            f"Quer gerar e-mail mesmo assim? ✉️",
+            True,
+        )
 
 
 async def cancelar_sessao(advogado: str, webhook_url: str):
