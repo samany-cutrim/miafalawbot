@@ -129,8 +129,10 @@ def _primary_button(label: str, function_name: str, parameters: list | None = No
     return {"text": label, "onClick": {"action": action}}
 
 
-def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: str) -> dict:
-    widgets: list[dict] = [{"textParagraph": {"text": _as_html(text)}}]
+def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: str, is_html: bool = False) -> dict:
+    """Renderiza card com botões. Se is_html=True, não escapa HTML tags."""
+    text_content = text if is_html else _as_html(text)
+    widgets: list[dict] = [{"textParagraph": {"text": text_content}}]
     if buttons:
         widgets.append({"buttonList": {"buttons": buttons}})
     return {
@@ -857,7 +859,15 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
 
     if re.search(r'^/?(sim|yes)', texto_lower):
         email_text = await gerar_email_sessao_data(advogado)
-        return _new_message_text(email_text)
+        return _new_message_cards([
+            _card_with_buttons(
+                "📧 Sugestão de e-mail",
+                email_text,
+                [_primary_button("◀ Menu", "open_home")],
+                "email_result",
+                is_html=True,
+            )
+        ])
 
     if re.search(r'^/?(nao|não|no)', texto_lower):
         msg = await dispensar_email_sessao_data(advogado)
@@ -982,6 +992,7 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
                 email_text,
                 [_primary_button("◀ Menu", "open_home")],
                 "email_result",
+                is_html=True,
             )
         ])
 

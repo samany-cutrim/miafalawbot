@@ -948,6 +948,70 @@ async def gerar_email_sessao(advogado: str, webhook_url: str):
     await send_webhook(webhook_url, await gerar_email_sessao_data(advogado))
 
 
+def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
+    """
+    Formata o corpo do e-mail com HTML estruturado.
+    Segue o padrão dos exemplos: metadata em negrito, seções com títulos, estrutura clara.
+    """
+    html = "<b>📧 SUGESTÃO DE E-MAIL</b><br><br>"
+    
+    # Metadata do caso
+    html += "<b>Processo:</b> " + row.get("NÚMERO DO PROCESSO", "N/A") + "<br>"
+    html += "<b>Reclamante:</b> " + row.get("NOME DO RECLAMANTE", "N/A") + "<br>"
+    html += "<b>Cliente:</b> " + row.get("CLIENTE", "N/A") + "<br>"
+    html += "<b>Vara/Turma:</b> " + row.get("VARA/TURMA", "N/A") + "<br>"
+    html += "<b>Data da decisão:</b> " + row.get("DATA DA DECISÃO", "N/A") + "<br>"
+    
+    valor = row.get("VALOR DA CONDENAÇÃO", "N/A")
+    if valor and valor != "N/A":
+        html += "<b>Valor:</b> " + valor + "<br>"
+    
+    html += "<br><b>───────────────────────────────────────────</b><br><br>"
+    
+    # Corpo do e-mail formatado
+    # Procura por linhas que começam com ** (títulos) e as formata como headers
+    lines = corpo_email.split('\n')
+    in_bullet_list = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Pula linhas vazias
+        if not stripped:
+            html += "<br>"
+            continue
+        
+        # Remove asteriscos (markdown) e formata como seção
+        if stripped.startswith('**') and stripped.endswith('**'):
+            # Fechamos lista de bullets anterior se houver
+            in_bullet_list = False
+            # Títulos em vermelho e negrito (estilo dos exemplos)
+            titulo = stripped.replace('**', '').strip().replace(':', '')
+            html += f'<font color="#ff0000"><b>{titulo}:</b></font><br>'
+        elif stripped.startswith('- '):
+            # Bullet points
+            in_bullet_list = True
+            item = stripped[2:].strip()
+            html += f"• {item}<br>"
+        elif stripped.startswith('* '):
+            # Bullet points alternativos
+            in_bullet_list = True
+            item = stripped[2:].strip()
+            html += f"• {item}<br>"
+        else:
+            # Parágrafo normal
+            in_bullet_list = False
+            # Remove asteriscos simples (negrito markdown) e converte para <b>
+            line_formatted = stripped.replace('*', '')
+            html += f"{line_formatted}<br>"
+    
+    html += "<br><b>───────────────────────────────────────────</b><br><br>"
+    html += f"<b>Assunto:</b><br><i>{assunto}</i><br><br>"
+    html += "<i>Sugestão gerada automaticamente. Revise antes de enviar.</i>"
+    
+    return html
+
+
 async def gerar_email_sessao_data(advogado: str) -> str:
     """Gera o e-mail de reporte ao cliente a partir da sessão confirmada."""
     chave = _chave_sessao(advogado)
@@ -957,7 +1021,7 @@ async def gerar_email_sessao_data(advogado: str) -> str:
 
     if not row:
         return (
-            f"⚠️ *{advogado}*, não há decisão recente para gerar o e-mail.\n"
+            f"⚠️ {advogado}, não há decisão recente para gerar o e-mail.<br>"
             f"Confirme uma decisão com `/confirmar` primeiro."
         )
 
@@ -981,19 +1045,15 @@ async def gerar_email_sessao_data(advogado: str) -> str:
         )
 
         corpo_email = await _chamar_ia(prompt)
+        
+        # Formata o e-mail com HTML estruturado
+        email_html = _formatar_email_html(corpo_email, assunto, row)
 
         del sessoes[chave_email]
         await salvar_sessoes(sessoes)
 
         logger.info("E-mail gerado para %s", advogado)
-        return (
-            f"📧 *SUGESTÃO DE E-MAIL*\n\n"
-            f"*Assunto:* {assunto}\n\n"
-            f"{'─' * 40}\n\n"
-            f"{corpo_email.strip()}\n\n"
-            f"{'─' * 40}\n"
-            f"_Sugestão gerada automaticamente. Revise antes de enviar._"
-        )
+        return email_html
 
     except Exception as e:
         logger.exception("Erro ao gerar e-mail: %s", e)
