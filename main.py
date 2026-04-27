@@ -560,6 +560,15 @@ async def _get_hints_pdf(advogado: str) -> tuple[str, str]:
 # Roda fora do ciclo de request/response, envia resultado via Webhook
 # ---------------------------------------------------------------------------
 
+async def _enviar_keep_alive(webhook_url: str, mensagem: str, delay: float = 15.0):
+    """Aguarda `delay` segundos e envia mensagem de keep-alive via webhook."""
+    await asyncio.sleep(delay)
+    try:
+        await send_webhook(webhook_url, mensagem)
+    except Exception:
+        pass
+
+
 async def _processar_pdf_background(
     resource_name: str,
     advogado: str,
@@ -584,6 +593,19 @@ async def _processar_pdf_background(
         if not texto_pdf or len(texto_pdf.strip()) < 50:
             await send_webhook(webhook_url, "⚠️ Não foi possível extrair texto do PDF. O arquivo pode estar escaneado.")
             return
+
+        # Dispara mensagem de keep-alive engraçada enquanto a IA pensa
+        import random
+        _frases_espera = [
+            "⚖️ Eita, essa decisão é pesada... já já chego com a análise!",
+            "🧠 A Mia tá quebrando a cabeça aqui... segura a ansiedade!",
+            "📜 Lendo cada vírgula dessa decisão. Quase lá!",
+            "☕ Tomando um cafezinho jurídico enquanto analiso... já volto!",
+            "🤔 Putz, que decisão complicada. Um segundo a mais, por favor!",
+            "⏳ Ainda aqui! Só terminando de discutir com o juiz virtual...",
+            "🔍 Investigando os fundamentos com lupa. Quase pronto!",
+        ]
+        asyncio.create_task(_enviar_keep_alive(webhook_url, random.choice(_frases_espera)))
 
         resultado = await processar_texto_chat(
             texto_pdf=texto_pdf,
