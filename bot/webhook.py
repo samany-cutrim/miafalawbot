@@ -16,6 +16,48 @@ async def send_webhook(webhook_url: str, text: str):
         logger.error("Erro no webhook [%s]: %s", r.status_code, r.text)
 
 
+async def send_text_with_service_account(
+    space_name: str,
+    text: str,
+    sa_file: str,
+    thread_name: str = "",
+) -> bool:
+    """Posta mensagem de texto via Google Chat REST API usando Service Account."""
+    try:
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as _ga_requests
+
+        creds = service_account.Credentials.from_service_account_file(
+            sa_file,
+            scopes=["https://www.googleapis.com/auth/chat.bot"],
+        )
+        creds.refresh(_ga_requests.Request())
+        token = creds.token
+
+        url = f"https://chat.googleapis.com/v1/{space_name}/messages"
+        payload: dict = {"text": text}
+        if thread_name:
+            payload["thread"] = {"name": thread_name}
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        if r.status_code in (200, 201):
+            logger.info("[ChatAPI] Texto enviado para %s", space_name)
+            return True
+
+        logger.error("[ChatAPI] Falha ao enviar texto [%s]: %s", r.status_code, r.text[:300])
+        return False
+
+    except Exception as e:
+        logger.exception("[ChatAPI] Erro ao enviar texto: %s", e)
+        return False
+
+
 async def send_card(webhook_url: str, card: dict):
     """Posta um card formatado no espaço via Incoming Webhook (sem botões interativos)."""
     fallback_text = card.pop("_fallback_text", "Erro ao formatar mensagem.")

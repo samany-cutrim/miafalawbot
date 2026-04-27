@@ -79,9 +79,9 @@ from bot.handlers import (
     carregar_sessoes,
     salvar_sessoes,
 )
-from bot.webhook import send_webhook, send_card, send_card_with_user_token, send_card_with_service_account
+from bot.webhook import send_webhook, send_card, send_card_with_user_token, send_card_with_service_account, send_text_with_service_account
 from bot.oauth import get_auth_url, exchange_code, refresh_access_token, get_user_info
-from bot.sheets import salvar_token_oauth, carregar_token_oauth
+from bot.sheets import salvar_token_oauth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,10 +127,6 @@ def _primary_button(label: str, function_name: str, parameters: list | None = No
     if open_dialog:
         action["interaction"] = "OPEN_DIALOG"
     return {"text": label, "onClick": {"action": action}}
-
-
-def _link_button(label: str, url: str) -> dict:
-    return {"text": label, "onClick": {"openLink": {"url": url}}}
 
 
 def _card_with_buttons(subtitle: str, text: str, buttons: list[dict], card_id: str) -> dict:
@@ -227,30 +223,12 @@ async def _home_card(advogado: str = "") -> dict:
         _primary_button("🔍 Buscar precedentes", "open_busca_card"),
         _primary_button("❓ Ajuda", "open_ajuda"),
     ]
-    extra_section = None
-    if advogado:
-        chave = advogado.strip().lower().split()[0]
-        token = await carregar_token_oauth(chave)
-        if not token:
-            auth_url = f"https://mia-falaw-bot.onrender.com/auth?advogado={advogado}"
-            extra_section = {
-                "header": "⚠️ Ação necessária — ativação",
-                "widgets": [{
-                    "textParagraph": {"text": "Para receber os cards interativos diretamente no chat (sem precisar mencionar @), clique no botão abaixo <b>uma única vez</b>:"}
-                }, {
-                    "buttonList": {"buttons": [
-                        _link_button("🔓 Ativar cards interativos", auth_url)
-                    ]}
-                }]
-            }
     sections: list[dict] = [{
         "widgets": [
             {"textParagraph": {"text": "Selecione uma opção abaixo:"}},
             {"buttonList": {"buttons": buttons}},
         ]
     }]
-    if extra_section:
-        sections.append(extra_section)
     return {
         "cardId": "home",
         "card": {
@@ -381,6 +359,39 @@ def _analysis_webhook_card(advogado: str, analysis_text: str) -> dict:
                         },
                     ]
                 }
+            ],
+        },
+    }
+
+
+def _analysis_result_card(advogado: str, analysis_text: str) -> dict:
+    return {
+        "cardId": "analysis_complete",
+        "card": {
+            "header": {
+                "title": "Mia Falaw Bot",
+                "subtitle": f"✅ Análise concluída — {advogado}",
+            },
+            "sections": [
+                {
+                    "widgets": [
+                        {"textParagraph": {"text": _as_html(analysis_text)}},
+                    ]
+                },
+                {
+                    "header": "O que deseja fazer com esta análise?",
+                    "widgets": [
+                        {
+                            "buttonList": {
+                                "buttons": [
+                                    _primary_button("✅ Confirmar", "confirm_decision"),
+                                    _primary_button("❌ Cancelar", "cancel_decision"),
+                                    _primary_button("✏️ Corrigir", "request_correction"),
+                                ]
+                            }
+                        }
+                    ],
+                },
             ],
         },
     }
@@ -614,37 +625,35 @@ async def _processar_pdf_background(
     cliente: str,
     tipo: str,
     space_name: str,
-    webhook_url: str,
+    thread_name: str,
 ):
     """
     Executado em background após resposta imediata ao Google Chat.
     Download do PDF → extração de texto → análise IA → envia card interativo.
-    Se o usuário já autorizou via /auth, usa o refresh_token salvo.
-    Caso contrário, fallback para webhook texto.
+    Envia o resultado no próprio Google Chat como card interativo nativo.
     """
     try:
         pdf_bytes = await _download_pdf_chat(resource_name)
         if not pdf_bytes:
-            await send_webhook(webhook_url, "⚠️ Não foi possível baixar o PDF. Tente enviar novamente.")
+            if space_name:
+                await send_text_with_service_account(
+                    space_name,
+                    "⚠️ Não foi possível baixar o PDF. Tente enviar novamente.",
+                    GOOGLE_SERVICE_ACCOUNT_FILE,
+                    thread_name=thread_name,
+                )
             return
 
         texto_pdf = extrair_texto_pdf(pdf_bytes)
         if not texto_pdf or len(texto_pdf.strip()) < 50:
-            await send_webhook(webhook_url, "⚠️ Não foi possível extrair texto do PDF. O arquivo pode estar escaneado.")
+            if space_name:
+                await send_text_with_service_account(
+                    space_name,
+                    "⚠️ Não foi possível extrair texto do PDF. O arquivo pode estar escaneado.",
+                    GOOGLE_SERVICE_ACCOUNT_FILE,
+                    thread_name=thread_name,
+                )
             return
-
-        # Dispara mensagem de keep-alive engraçada enquanto a IA pensa
-        import random
-        _frases_espera = [
-            "⚖️ Eita, essa decisão é pesada... já já chego com a análise!",
-            "🧠 A Mia tá quebrando a cabeça aqui... segura a ansiedade!",
-            "📜 Lendo cada vírgula dessa decisão. Quase lá!",
-            "☕ Tomando um cafezinho jurídico enquanto analiso... já volto!",
-            "🤔 Putz, que decisão complicada. Um segundo a mais, por favor!",
-            "⏳ Ainda aqui! Só terminando de discutir com o juiz virtual...",
-            "🔍 Investigando os fundamentos com lupa. Quase pronto!",
-        ]
-        asyncio.create_task(_enviar_keep_alive(webhook_url, random.choice(_frases_espera)))
 
         resultado = await processar_texto_chat(
             texto_pdf=texto_pdf,
@@ -655,45 +664,33 @@ async def _processar_pdf_background(
 
         primeiro = advogado.strip().split()[0]
 
-        # Envia card único com análise + botões (sem duplicar em texto puro)
         if space_name:
-            card_enviado = await send_card_with_service_account(
+            await send_card_with_service_account(
                 space_name=space_name,
-                card=_analysis_webhook_card(primeiro, resultado),
+                card=_analysis_result_card(primeiro, resultado),
                 sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
-            )
-            if not card_enviado and webhook_url:
-                # Fallback: texto + instrução de @menção
-                await send_webhook(
-                    webhook_url,
-                    f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
-                    "_Para confirmar, mencione @Mia Falaw Bot no chat._"
-                )
-        elif webhook_url:
-            await send_webhook(
-                webhook_url,
-                f"\u2705 *Análise concluída, {primeiro}!*\n\n{resultado}\n\n"
-                "_Para confirmar, mencione @Mia Falaw Bot no chat._"
+                thread_name=thread_name,
             )
 
-        logger.info("[BG] Análise enviada via webhook para %s", advogado)
+        logger.info("[BG] Análise enviada via Chat API para %s", advogado)
 
     except Exception as exc:
         logger.exception("[BG] Erro ao processar PDF em background: %s", exc)
-        try:
-            await send_webhook(
-                webhook_url,
-                f"⚠️ Erro ao analisar o PDF: {str(exc)[:200]}\nTente enviar novamente."
-            )
-        except Exception:
-            pass
+        if space_name:
+            try:
+                await send_text_with_service_account(
+                    space_name,
+                    f"⚠️ Erro ao analisar o PDF: {str(exc)[:200]}\nTente enviar novamente.",
+                    GOOGLE_SERVICE_ACCOUNT_FILE,
+                    thread_name=thread_name,
+                )
+            except Exception:
+                pass
 
 
 async def _download_pdf_chat(resource_name: str) -> bytes | None:
-    """Baixa PDF: tenta SA primeiro, fallback Apps Script."""
-    import base64 as _b64
+    """Baixa PDF via Service Account do Google Chat."""
 
-    # 1. Tenta via Service Account (chat.bot scope)
     try:
         from google.oauth2 import service_account
         import google.auth.transport.requests as _ga_requests
@@ -713,31 +710,9 @@ async def _download_pdf_chat(resource_name: str) -> bytes | None:
         if sa_resp.status_code == 200 and sa_resp.content:
             logger.info("[PDF] SA OK — %d bytes", len(sa_resp.content))
             return sa_resp.content
-        logger.warning("[PDF] SA falhou (%s) — tentando Apps Script", sa_resp.status_code)
+        logger.warning("[PDF] SA falhou (%s)", sa_resp.status_code)
     except Exception as e:
-        logger.warning("[PDF] SA erro: %s — tentando Apps Script", e)
-
-    # 2. Fallback: Apps Script proxy
-    if not APPS_SCRIPT_DOPOST_URL:
-        logger.error("[PDF] APPS_SCRIPT_DOPOST_URL não configurado")
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
-            as_resp = await cli.post(
-                APPS_SCRIPT_DOPOST_URL,
-                json={"action": "download_pdf", "resource_name": resource_name}
-            )
-
-        logger.info("[PDF] Apps Script status: %s", as_resp.status_code)
-        if as_resp.status_code == 200:
-            as_data = as_resp.json()
-            if as_data.get("status") == "ok" and as_data.get("pdf_base64"):
-                pdf_bytes = _b64.b64decode(as_data["pdf_base64"])
-                logger.info("[PDF] Apps Script OK — %d bytes", len(pdf_bytes))
-                return pdf_bytes
-        logger.error("[PDF] Apps Script falhou: %s", as_resp.text[:200])
-    except Exception as e:
-        logger.error("[PDF] Erro Apps Script: %s", e)
+        logger.warning("[PDF] SA erro: %s", e)
 
     return None
 
@@ -814,13 +789,8 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                 )
 
             space_name = (msg_obj.get("space") or {}).get("name") or ""
+            thread_name = (msg_obj.get("thread") or {}).get("name") or ""
             primeiro = advogado.strip().split()[0]
-
-            # Envia mensagem engraçada via webhook imediatamente (keep-alive enquanto IA processa)
-            # Inicia loop de keep-alive via webhook (mantém sessão viva durante o processamento)
-            _keep_alive_stop = asyncio.Event()
-            if WEBHOOK_URL:
-                asyncio.create_task(_loop_keep_alive(WEBHOOK_URL, _keep_alive_stop))
 
             # Tenta processar sincronamente (dentro do timeout de 30s do Chat)
             # Cards retornados como resposta a evento sempre funcionam com botões
@@ -846,19 +816,9 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                 )
 
                 logger.info("[PDF] Processamento síncrono OK para %s", advogado)
-                _keep_alive_stop.set()
-                # Envia via webhook — garante entrega mesmo se a conexão HTTP do Google já fechou (>30s)
-                if WEBHOOK_URL:
-                    background_tasks.add_task(
-                        send_card,
-                        WEBHOOK_URL,
-                        _analysis_webhook_card(primeiro, resultado),
-                    )
-                # Retorna resposta simples ao evento (pode ser ignorada se >30s, mas não faz mal)
-                return _new_message_text(f"✅ Análise concluída, {primeiro}! Verifique a mensagem acima.")
+                return _new_message_cards([_analysis_result_card(primeiro, resultado)])
 
             except Exception as e:
-                _keep_alive_stop.set()
                 logger.warning("[PDF] Processamento síncrono falhou (%s) — usando background task", e)
                 background_tasks.add_task(
                     _processar_pdf_background,
@@ -867,7 +827,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                     cliente=cliente,
                     tipo=tipo,
                     space_name=space_name,
-                    webhook_url=WEBHOOK_URL,
+                    thread_name=thread_name,
                 )
                 return _new_message_text(
                     f"⏳ *Analisando decisão, {primeiro}...* \n"
@@ -1315,47 +1275,14 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                     tipo_responsabilidade=tipo_hint or "OL",
                 )
                 primeiro = advogado.strip().split()[0]
-                card = _analysis_webhook_card(primeiro, resultado)
-                enviado = False
-
-                # Tenta enviar via Apps Script doPost (botões funcionam)
-                if APPS_SCRIPT_DOPOST_URL:
-                    try:
-                        async with httpx.AsyncClient(timeout=20) as cli:
-                            as_resp = await cli.post(
-                                APPS_SCRIPT_DOPOST_URL,
-                                json={
-                                    "action": "post_card",
-                                    "space_name": space_name,
-                                    "thread_name": thread_name,
-                                    "card": card,
-                                },
-                                follow_redirects=True,
-                            )
-                        if as_resp.status_code in (200, 201):
-                            as_data = as_resp.json()
-                            enviado = as_data.get("status") == "ok"
-                            if not enviado:
-                                logger.warning("[ANALISAR-BG] Apps Script retornou erro: %s", as_data)
-                        else:
-                            logger.warning("[ANALISAR-BG] Apps Script HTTP %s", as_resp.status_code)
-                    except Exception as exc_as:
-                        logger.warning("[ANALISAR-BG] Falha ao chamar Apps Script doPost: %s", exc_as)
-
-                # Fallback: user token OAuth (se disponível)
-                if not enviado and oauth_token:
-                    enviado = await send_card_with_user_token(
-                        space_name=space_name,
-                        card=card,
-                        oauth_token=oauth_token,
-                        thread_name=thread_name,
-                    )
-
-                # Último fallback: webhook (sem botões funcionais)
+                enviado = await send_card_with_service_account(
+                    space_name=space_name,
+                    card=_analysis_result_card(primeiro, resultado),
+                    sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
+                    thread_name=thread_name,
+                )
                 if not enviado:
-                    logger.error("[ANALISAR-BG] Todos os métodos falharam — fallback webhook para %s", advogado)
-                    if WEBHOOK_URL:
-                        await send_card(WEBHOOK_URL, _analysis_webhook_card(primeiro, resultado))
+                    logger.error("[ANALISAR-BG] Falha ao enviar card nativo para %s", advogado)
             except Exception as exc:
                 logger.exception("[ANALISAR-BG] Erro: %s", exc)
 
