@@ -1049,7 +1049,15 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
 
     chat_data = event.get("chat") or {}
     common    = event.get("commonEventObject") or {}
-    user_info = chat_data.get("user") or {}
+    message_payload = chat_data.get("messagePayload") or {}
+    base_message = message_payload.get("message") or chat_data.get("message") or {}
+
+    # Em alguns eventos (principalmente com anexo), o usuário vem em message.sender.
+    user_info = (
+        chat_data.get("user")
+        or base_message.get("sender")
+        or {}
+    )
     advogado  = user_info.get("displayName") or "Advogado"
 
     # ------------------------------------------------------------------
@@ -1083,7 +1091,6 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
     # ------------------------------------------------------------------
     # 2. CARD_CLICKED alternativo — buttonClickedPayload
     # ------------------------------------------------------------------
-    message_payload = chat_data.get("messagePayload") or {}
     button_payload  = (
         chat_data.get("buttonClickedPayload")
         or message_payload.get("buttonClickedPayload")
@@ -1120,13 +1127,15 @@ async def chat_event(request: Request, background_tasks: BackgroundTasks):
     # ------------------------------------------------------------------
     # 3. MESSAGE — mensagem de texto (com background_tasks para PDF)
     # ------------------------------------------------------------------
-    message = message_payload.get("message") or chat_data.get("message") or {}
+    message = base_message
     if message:
+        message_user = message.get("sender") or user_info
+        advogado_msg = (message_user or {}).get("displayName") or advogado
         texto = (message.get("argumentText") or message.get("text") or "").strip()
-        logger.info("[/chat] MESSAGE user=%s texto=%r", advogado, texto[:100])
+        logger.info("[/chat] MESSAGE user=%s texto=%r", advogado_msg, texto[:100])
         try:
             result = await _handle_message(
-                {"user": user_info, "message": message},
+                {"user": message_user, "message": message},
                 background_tasks
             )
             logger.info("[/chat] MESSAGE response: %s", json.dumps(result, ensure_ascii=False)[:500])
