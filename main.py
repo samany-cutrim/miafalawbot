@@ -820,20 +820,12 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
 
                 logger.info("[PDF] Processamento síncrono OK para %s", advogado)
                 _keep_alive_stop.set()
-                # Envia via webhook SEMPRE — garante entrega mesmo se o Google Chat
-                # já tiver fechado a conexão por timeout (>30s)
-                if space_name:
+                # Envia via webhook — garante entrega mesmo se a conexão HTTP do Google já fechou (>30s)
+                if WEBHOOK_URL:
                     background_tasks.add_task(
-                        send_card_with_service_account,
-                        space_name=space_name,
-                        card=_analysis_webhook_card(primeiro, resultado),
-                        sa_file=GOOGLE_SERVICE_ACCOUNT_FILE,
-                    )
-                elif WEBHOOK_URL:
-                    background_tasks.add_task(
-                        send_webhook,
+                        send_card,
                         WEBHOOK_URL,
-                        f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}",
+                        _analysis_webhook_card(primeiro, resultado),
                     )
                 # Retorna resposta simples ao evento (pode ser ignorada se >30s, mas não faz mal)
                 return _new_message_text(f"✅ Análise concluída, {primeiro}! Verifique a mensagem acima.")
