@@ -23,6 +23,39 @@ function doPost(e) {
     var body = JSON.parse(e.postData.contents);
     var action = body.action || "post_card";
 
+    if (action === "download_pdf") {
+      var resourceName = body.resource_name;
+      if (!resourceName) {
+        return ContentService.createTextOutput(
+          JSON.stringify({ status: "error", erro: "resource_name é obrigatório" })
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+      try {
+        var token = ScriptApp.getOAuthToken();
+        var dlUrl = "https://chat.googleapis.com/v1/" + resourceName + "?alt=media";
+        var dlResp = UrlFetchApp.fetch(dlUrl, {
+          headers: { "Authorization": "Bearer " + token },
+          muteHttpExceptions: true
+        });
+        var dlCode = dlResp.getResponseCode();
+        if (dlCode === 200) {
+          var pdfBase64 = Utilities.base64Encode(dlResp.getContent());
+          return ContentService.createTextOutput(
+            JSON.stringify({ status: "ok", pdf_base64: pdfBase64 })
+          ).setMimeType(ContentService.MimeType.JSON);
+        }
+        Logger.log("[doPost download_pdf] Erro HTTP " + dlCode + ": " + dlResp.getContentText().substring(0, 200));
+        return ContentService.createTextOutput(
+          JSON.stringify({ status: "error", code: dlCode, detail: dlResp.getContentText().substring(0, 200) })
+        ).setMimeType(ContentService.MimeType.JSON);
+      } catch (dlErr) {
+        Logger.log("[doPost download_pdf] Erro: " + dlErr);
+        return ContentService.createTextOutput(
+          JSON.stringify({ status: "error", erro: dlErr.message })
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
     if (action === "post_card") {
       var spaceName  = body.space_name  || SPACE_NAME;
       var threadName = body.thread_name || "";
