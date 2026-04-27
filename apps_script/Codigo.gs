@@ -12,6 +12,70 @@ var FORM_ID = "SEU_FORM_ID";
 var SPACE_NAME = "spaces/SEU_SPACE";
 var ULTIMA_LEITURA_KEY = "ultimaLeitura";
 
+// ---------------------------------------------------------------------------
+// doPost — Render chama este endpoint com o resultado da análise.
+// Apps Script usa ScriptApp.getOAuthToken() para postar o card com botões,
+// garantindo que os botões disparem eventos no Chat App.
+// ---------------------------------------------------------------------------
+
+function doPost(e) {
+  try {
+    var body = JSON.parse(e.postData.contents);
+    var action = body.action || "post_card";
+
+    if (action === "post_card") {
+      var spaceName  = body.space_name  || SPACE_NAME;
+      var threadName = body.thread_name || "";
+      var cardJson   = body.card;
+
+      if (!cardJson || !spaceName) {
+        return ContentService.createTextOutput(
+          JSON.stringify({ status: "error", erro: "card e space_name são obrigatórios" })
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var token = ScriptApp.getOAuthToken();
+      var url = "https://chat.googleapis.com/v1/" + spaceName + "/messages";
+
+      var payload = { cardsV2: [cardJson] };
+      if (threadName) {
+        payload.thread = { name: threadName };
+      }
+
+      var resp = UrlFetchApp.fetch(url, {
+        method: "post",
+        contentType: "application/json",
+        headers: { "Authorization": "Bearer " + token },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+
+      var code = resp.getResponseCode();
+      if (code === 200 || code === 201) {
+        Logger.log("[doPost] Card enviado com sucesso para " + spaceName);
+        return ContentService.createTextOutput(
+          JSON.stringify({ status: "ok" })
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      Logger.log("[doPost] Erro ao enviar card: " + code + " " + resp.getContentText().substring(0, 300));
+      return ContentService.createTextOutput(
+        JSON.stringify({ status: "error", code: code, detail: resp.getContentText().substring(0, 300) })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "error", erro: "action desconhecida: " + action })
+    ).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    Logger.log("[doPost] Erro: " + err);
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: "error", erro: err.message })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // CHAT APP NATIVO (com modal/dialog)

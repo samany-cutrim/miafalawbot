@@ -63,7 +63,7 @@ async def _verificar_token_google(request: Request) -> bool:
         return True
 
 
-from bot.config import GITHUB_TOKEN, GOOGLE_SERVICE_ACCOUNT_FILE, WEBHOOK_URL
+from bot.config import GITHUB_TOKEN, GOOGLE_SERVICE_ACCOUNT_FILE, WEBHOOK_URL, APPS_SCRIPT_DOPOST_URL
 from bot.handlers import (
     cancelar_sessao_data,
     confirmar_sessao_data,
@@ -1296,14 +1296,44 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                 )
                 primeiro = advogado.strip().split()[0]
                 card = _analysis_webhook_card(primeiro, resultado)
-                enviado = await send_card_with_user_token(
-                    space_name=space_name,
-                    card=card,
-                    oauth_token=oauth_token,
-                    thread_name=thread_name,
-                )
+                enviado = False
+
+                # Tenta enviar via Apps Script doPost (botões funcionam)
+                if APPS_SCRIPT_DOPOST_URL:
+                    try:
+                        async with httpx.AsyncClient(timeout=20) as cli:
+                            as_resp = await cli.post(
+                                APPS_SCRIPT_DOPOST_URL,
+                                json={
+                                    "action": "post_card",
+                                    "space_name": space_name,
+                                    "thread_name": thread_name,
+                                    "card": card,
+                                },
+                                follow_redirects=True,
+                            )
+                        if as_resp.status_code in (200, 201):
+                            as_data = as_resp.json()
+                            enviado = as_data.get("status") == "ok"
+                            if not enviado:
+                                logger.warning("[ANALISAR-BG] Apps Script retornou erro: %s", as_data)
+                        else:
+                            logger.warning("[ANALISAR-BG] Apps Script HTTP %s", as_resp.status_code)
+                    except Exception as exc_as:
+                        logger.warning("[ANALISAR-BG] Falha ao chamar Apps Script doPost: %s", exc_as)
+
+                # Fallback: user token OAuth (se disponível)
+                if not enviado and oauth_token:
+                    enviado = await send_card_with_user_token(
+                        space_name=space_name,
+                        card=card,
+                        oauth_token=oauth_token,
+                        thread_name=thread_name,
+                    )
+
+                # Último fallback: webhook (sem botões funcionais)
                 if not enviado:
-                    logger.error("[ANALISAR-BG] Falha ao enviar card via user token para %s — fallback webhook", advogado)
+                    logger.error("[ANALISAR-BG] Todos os métodos falharam — fallback webhook para %s", advogado)
                     if WEBHOOK_URL:
                         await send_card(WEBHOOK_URL, _analysis_webhook_card(primeiro, resultado))
             except Exception as exc:

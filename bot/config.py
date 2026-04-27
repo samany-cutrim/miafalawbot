@@ -8,6 +8,7 @@ import tempfile
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
 WEBHOOK_URL       = os.environ.get("WEBHOOK_URL", "")
+APPS_SCRIPT_DOPOST_URL = os.environ.get("APPS_SCRIPT_DOPOST_URL", "")
 OAUTH_CLIENT_ID   = os.environ.get("OAUTH_CLIENT_ID", "")
 OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 
