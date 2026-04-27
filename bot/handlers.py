@@ -18,12 +18,24 @@ def _now_br() -> datetime:
     return datetime.now(_TZ_BRASILIA)
 
 from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
-from bot.config import GITHUB_TOKEN
+from bot.config import GITHUB_TOKEN, GEMINI_API_KEY
 from bot.webhook import send_webhook
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Gemini (via google.generativeai SDK)
+_gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        _gemini_client = genai
+        logger.info("Google Generative AI (Gemini) inicializado com sucesso.")
+    except Exception as e:
+        logger.warning("Falha ao inicializar Gemini: %s", e)
+        _gemini_client = None
 
 # GitHub Copilot (via openai SDK)
 _copilot = None
@@ -305,6 +317,23 @@ async def _resolver_modelos_github() -> list[str]:
     return _cached_model_order
 
 async def _chamar_ia(prompt: str) -> str:
+    # Primeiro: tenta Gemini se configurado
+    if _gemini_client:
+        try:
+            model = _gemini_client.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content(
+                prompt,
+                generation_config=_gemini_client.types.GenerationConfig(
+                    max_output_tokens=2048,
+                    temperature=0.7,
+                )
+            )
+            logger.info("IA: Gemini respondeu com sucesso.")
+            return response.text or ""
+        except Exception as e:
+            logger.warning("Gemini falhou, tentando GitHub Copilot: %s", e)
+
+    # Fallback: GitHub Copilot
     global _last_success_model
 
     def _is_unknown_model_error(err: Exception) -> bool:
