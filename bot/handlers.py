@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone, timedelta
 import pdfplumber
 
@@ -414,9 +415,10 @@ Retorne APENAS um JSON válido com os seguintes campos:
     }}
   ],
   "fundamentos_juridicos": "todos os artigos CLT/CC, súmulas TST/STJ/STF, OJs, temas repetitivos citados na decisão",
+    "valor_causa": "valor da causa em reais (ex: R$ 15.430,00) se constar expressamente no documento, senão N/A",
   "valor_condenacao": "valor líquido em reais (ex: R$ 15.430,00) ou N/A se favorável",
-  "deposito_recursal": "valor estimado de depósito recursal (50% da condenação, limitado ao teto legal) ou N/A",
-  "prazo_recursal": "prazo para recurso (geralmente 8 dias úteis para RO) ou N/A",
+    "deposito_recursal": "N/A — o sistema calculará a recomendação final conforme a tabela vigente do TST",
+    "prazo_recursal": "prazo para recurso se constar ou for claramente inferível, senão N/A",
   "resumo_geral": "resumo executivo em 4-6 linhas do ponto de vista da empresa: o que foi decidido, impacto financeiro, risco residual e recomendação imediata",
   "nivel_risco": "BAIXO | MÉDIO | ALTO | CRÍTICO — avaliação do risco financeiro/jurídico para a empresa",
   "recomendacao": "RECORRER | AGUARDAR | CUMPRIR | NEGOCIAR — recomendação estratégica com breve justificativa",
@@ -496,81 +498,161 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
     risco_icones = {'BAIXO': '🟢', 'MÉDIO': '🟡', 'ALTO': '🔴', 'CRÍTICO': '🚨'}
     icone_risco = risco_icones.get(nivel_risco.upper() if nivel_risco else '', '⚪')
 
-    r = f"{icone_resultado} *ANÁLISE CONCLUÍDA — aguardando confirmação*\n\n"
+    r = f"<b>{icone_resultado} ANÁLISE CONCLUÍDA — aguardando confirmação</b><br><br>"
 
-    # Bloco identificação
-    r += f"📋 *{d.get('tipo_decisao', 'N/A')}* — {icone_resultado} {resultado}\n"
-    r += f"🏛️ *TRT:* {d.get('trt', 'N/A')}\n"
-    r += f"📄 *Processo:* {d.get('numero_processo', 'N/A')}\n"
-    r += f"👤 *Reclamante:* {d.get('nome_reclamante', 'N/A')}\n"
-    r += f"🏢 *Cliente:* {d.get('_cliente_final', 'N/A')}\n"
-    r += f"⚖️ *Tipo:* {d.get('_tipo_final', 'N/A')}\n"
-    r += f"📅 *Data:* {d.get('data_decisao', 'N/A')}\n"
-    r += f"👨‍⚖️ *Juiz/Relator:* {d.get('juiz_relator', 'N/A')}\n"
-    r += f"🏠 *Vara/Turma:* {d.get('vara_turma', 'N/A')}\n"
-    r += f"💰 *Valor:* {d.get('valor_condenacao', 'N/A')}\n"
+    r += "<b>Identificação</b><br>"
+    r += f"📋 <b>{d.get('tipo_decisao', 'N/A')}</b> — {icone_resultado} {resultado}<br>"
+    r += f"🏛️ <b>TRT:</b> {d.get('trt', 'N/A')}<br>"
+    r += f"📄 <b>Processo:</b> {d.get('numero_processo', 'N/A')}<br>"
+    r += f"👤 <b>Reclamante:</b> {d.get('nome_reclamante', 'N/A')}<br>"
+    r += f"🏢 <b>Cliente:</b> {d.get('_cliente_final', 'N/A')}<br>"
+    r += f"⚖️ <b>Tipo:</b> {d.get('_tipo_final', 'N/A')}<br>"
+    r += f"📅 <b>Data:</b> {d.get('data_decisao', 'N/A')}<br>"
+    r += f"👨‍⚖️ <b>Juiz/Relator:</b> {d.get('juiz_relator', 'N/A')}<br>"
+    r += f"🏠 <b>Vara/Turma:</b> {d.get('vara_turma', 'N/A')}<br>"
+    r += f"💰 <b>Valor:</b> {d.get('valor_condenacao', 'N/A')}<br>"
 
     if d.get('deposito_recursal') and d.get('deposito_recursal') != 'N/A':
-        r += f"🏦 *Depósito Recursal:* {d.get('deposito_recursal')}\n"
+        r += f"🏦 <b>Depósito Recursal:</b> {d.get('deposito_recursal')}<br>"
     if d.get('prazo_recursal') and d.get('prazo_recursal') != 'N/A':
-        r += f"⏰ *Prazo Recursal:* {d.get('prazo_recursal')}\n"
+        r += f"⏰ <b>Prazo Recursal:</b> {d.get('prazo_recursal')}<br>"
 
-    r += "\n"
+    r += "<br><b>Resumo Executivo</b><br>"
+    r += f"{d.get('resumo_geral', 'N/A')}<br><br>"
 
-    # Resumo executivo
-    r += f"📝 *Resumo Executivo:*\n{d.get('resumo_geral', 'N/A')}\n\n"
-
-    # Risco e recomendação
     if nivel_risco:
-        r += f"{icone_risco} *Nível de Risco:* {nivel_risco}\n"
+        r += f"{icone_risco} <b>Nível de Risco:</b> {nivel_risco}<br>"
     if recomendacao:
         rec_icones = {'RECORRER': '⚡', 'AGUARDAR': '⏳', 'CUMPRIR': '✅', 'NEGOCIAR': '🤝'}
         icone_rec = rec_icones.get(recomendacao.split()[0].upper() if recomendacao else '', '📌')
-        r += f"{icone_rec} *Recomendação:* {recomendacao}\n"
-    r += "\n"
+        r += f"{icone_rec} <b>Recomendação:</b> {recomendacao}<br>"
+    r += "<br>"
 
     # Pedidos indeferidos (vitórias)
     pedidos_ind = d.get('pedidos_indeferidos') or []
     if isinstance(pedidos_ind, list) and pedidos_ind:
-        r += "🏆 *Pedidos Indeferidos (vitórias da empresa):*\n"
+        r += "<b>🏆 Pedidos Indeferidos (vitórias da empresa)</b><br>"
         for item in pedidos_ind:
-            r += f"  • {item}\n"
-        r += "\n"
+            r += f"• {item}<br>"
+        r += "<br>"
 
     # Pedidos deferidos
     pedidos_def = d.get('pedidos_deferidos') or []
     if isinstance(pedidos_def, list) and pedidos_def:
-        r += "⚠️ *Pedidos Deferidos (contra a empresa):*\n"
+        r += "<b>⚠️ Pedidos Deferidos (contra a empresa)</b><br>"
         for item in pedidos_def:
-            r += f"  • {item}\n"
-        r += "\n"
+            r += f"• {item}<br>"
+        r += "<br>"
 
     # Entendimentos favoráveis
     favs = d.get('entendimentos_favoraveis') or []
     if isinstance(favs, list) and favs:
-        r += "✅ *Entendimentos Favoráveis (use como precedente):*\n"
+        r += "<b>✅ Entendimentos Favoráveis</b><br>"
         for i, e in enumerate(favs, 1):
             if isinstance(e, dict):
-                r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
+                r += f"{i}. <b>{e.get('tema','')}:</b> {e.get('entendimento','')}<br>"
                 if e.get('uso_como_precedente'):
-                    r += f"     _↳ {e.get('uso_como_precedente')}_\n"
-        r += "\n"
+                    r += f"<i>↳ {e.get('uso_como_precedente')}</i><br>"
+        r += "<br>"
 
     # Entendimentos desfavoráveis
     desfavs = d.get('entendimentos_desfavoraveis') or []
     if isinstance(desfavs, list) and desfavs:
-        r += "❌ *Entendimentos Desfavoráveis (atenção/recurso):*\n"
+        r += "<b>❌ Entendimentos Desfavoráveis</b><br>"
         for i, e in enumerate(desfavs, 1):
             if isinstance(e, dict):
-                r += f"  {i}. *{e.get('tema','')}:* {e.get('entendimento','')}\n"
+                r += f"{i}. <b>{e.get('tema','')}:</b> {e.get('entendimento','')}<br>"
                 if e.get('estrategia_recursal'):
-                    r += f"     _↳ Estratégia: {e.get('estrategia_recursal')}_\n"
-        r += "\n"
+                    r += f"<i>↳ Estratégia: {e.get('estrategia_recursal')}</i><br>"
+        r += "<br>"
 
-    r += f"📚 *Fundamentos Jurídicos:* {d.get('fundamentos_juridicos', 'N/A')}\n\n"
-    r += f"📌 *Uso como Precedente:*\n{d.get('observacoes_precedente', 'N/A')}\n"
-    r += f"\n_Analisado por {sigla} em {_now_br().strftime('%d/%m/%Y %H:%M')}_"
+    r += f"<b>📚 Fundamentos Jurídicos:</b> {d.get('fundamentos_juridicos', 'N/A')}<br><br>"
+    r += f"<b>📌 Uso como Precedente:</b><br>{d.get('observacoes_precedente', 'N/A')}<br><br>"
+    r += f"<i>Analisado por {sigla} em {_now_br().strftime('%d/%m/%Y %H:%M')}</i>"
     return r
+
+
+TETO_RO_2025 = Decimal("13813.83")
+TETO_RR_2025 = Decimal("27627.66")
+
+
+def _parse_brl_value(texto: str | None) -> Decimal | None:
+    if not texto:
+        return None
+    m = re.search(r"R\$\s*([\d\.]+,\d{2})", str(texto))
+    if not m:
+        return None
+    try:
+        return Decimal(m.group(1).replace('.', '').replace(',', '.'))
+    except (InvalidOperation, AttributeError):
+        return None
+
+
+def _format_brl_value(valor: Decimal) -> str:
+    s = f"{valor:.2f}"
+    inteiro, frac = s.split('.')
+    grupos = []
+    while inteiro:
+        grupos.append(inteiro[-3:])
+        inteiro = inteiro[:-3]
+    return f"R$ {'.'.join(reversed(grupos))},{frac}"
+
+
+def _extrair_valor_causa(texto: str) -> Decimal | None:
+    m = re.search(r"valor\s+da\s+causa[^\n\r:]*[:\s]+R\$\s*([\d\.]+,\d{2})", texto, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return Decimal(m.group(1).replace('.', '').replace(',', '.'))
+    except InvalidOperation:
+        return None
+
+
+def _definir_regras_recursais(analise: dict, texto_pdf: str):
+    texto_base = " ".join([
+        str(analise.get("tipo_decisao", "")),
+        str(analise.get("fundamentos_juridicos", "")),
+        texto_pdf[:5000],
+    ]).lower()
+
+    valor_causa = _extrair_valor_causa(texto_pdf)
+    valor_condenacao = _parse_brl_value(analise.get("valor_condenacao"))
+    trt = str(analise.get("trt", "") or "")
+
+    eh_rr_ou_tst = (
+        "recurso de revista" in texto_base
+        or "embargos" in texto_base
+        or trt.upper() == "TST"
+        or (analise.get("tipo_decisao") == "Acórdão" and trt.upper().startswith("TRT-"))
+    )
+
+    if eh_rr_ou_tst:
+        analise["deposito_recursal"] = (
+            "Verificar se já há depósito recursal no processo e se há necessidade de preparo recursal complementar "
+            f"(teto TST vigente para RR/Embargos/Ação Rescisória: {_format_brl_value(TETO_RR_2025)})."
+        )
+        analise["prazo_recursal"] = analise.get("prazo_recursal") or "8 dias úteis"
+        if valor_causa is not None:
+            analise["valor_causa"] = _format_brl_value(valor_causa)
+        return
+
+    teto = TETO_RO_2025
+    base = None
+    base_label = None
+    if valor_causa is not None and valor_causa < teto:
+        base = valor_causa
+        base_label = "valor da causa"
+    elif valor_condenacao is not None and valor_condenacao < teto:
+        base = valor_condenacao
+        base_label = "valor da condenação"
+    else:
+        base = teto
+        base_label = "teto vigente do TST"
+
+    analise["deposito_recursal"] = f"{_format_brl_value(base)} — recomendado com base no {base_label}."
+    analise["prazo_recursal"] = analise.get("prazo_recursal") or "8 dias úteis"
+    if valor_causa is not None:
+        analise["valor_causa"] = _format_brl_value(valor_causa)
 
 
 def formatar_entendimentos(lista: list) -> str:
@@ -1038,6 +1120,7 @@ async def _analisar_e_aguardar(
         return "⚠️ Não foi possível extrair texto do PDF."
 
     analise = await analisar_decisao(texto_pdf, hints["cliente"] or "", hints["tipo"] or "")
+    _definir_regras_recursais(analise, texto_pdf)
 
     # Atualiza TRT se necessário
     trt = analise.get("trt", "N/A")

@@ -342,7 +342,7 @@ def _analysis_webhook_card(advogado: str, analysis_text: str) -> dict:
             "sections": [
                 {
                     "widgets": [
-                        {"textParagraph": {"text": _as_html(f"✅ Análise concluída, {advogado}!\n\n{analysis_text}")}},
+                        {"textParagraph": {"text": f"<b>✅ Análise concluída, {advogado}!</b><br><br>{analysis_text}"}},
                         {
                             "buttonList": {
                                 "buttons": [
@@ -375,7 +375,7 @@ def _analysis_result_card(advogado: str, analysis_text: str) -> dict:
             "sections": [
                 {
                     "widgets": [
-                        {"textParagraph": {"text": _as_html(analysis_text)}},
+                        {"textParagraph": {"text": analysis_text}},
                     ]
                 },
                 {

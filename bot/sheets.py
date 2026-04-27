@@ -8,6 +8,7 @@ import logging
 import os
 
 import gspread
+from gspread.utils import rowcol_to_a1
 
 from bot.config import SPREADSHEET_ID, COLUNAS
 
@@ -43,6 +44,15 @@ def _aba_precedentes(sh):
     return sh.get_worksheet(0)
 
 
+def _worksheet_by_names(sh, names: list[str]):
+    for name in names:
+        try:
+            return sh.worksheet(name)
+        except gspread.WorksheetNotFound:
+            continue
+    raise gspread.WorksheetNotFound()
+
+
 def _salvar_sync(row: dict):
     sh = _client().open_by_key(SPREADSHEET_ID)
     valores = []
@@ -55,7 +65,10 @@ def _salvar_sync(row: dict):
         valores.append(str(v) if not isinstance(v, str) else v)
 
     ws = _aba_precedentes(sh)
-    ws.append_row(valores, value_input_option="USER_ENTERED")
+    next_row = len(ws.col_values(1)) + 1
+    start = rowcol_to_a1(next_row, 1)
+    end = rowcol_to_a1(next_row, len(valores))
+    ws.update(f"{start}:{end}", [valores], value_input_option="USER_ENTERED")
     logger.info("Salvo em Precedentes: %s", row.get("NÚMERO DO PROCESSO"))
 
 
@@ -78,7 +91,7 @@ async def buscar_precedentes() -> list[dict]:
 # SESSÕES PENDENTES — salvas numa aba oculta da planilha
 # ---------------------------------------------------------------------------
 
-SESSOES_ABA = "_sessoes_pendentes"
+SESSOES_ABAS = ["_sessoes_pendentes", "sessoes pendentes", "sessoes_pendentes"]
 
 
 def _carregar_sessoes_sync() -> dict:
@@ -86,7 +99,7 @@ def _carregar_sessoes_sync() -> dict:
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
         try:
-            ws = sh.worksheet(SESSOES_ABA)
+            ws = _worksheet_by_names(sh, SESSOES_ABAS)
         except gspread.WorksheetNotFound:
             return dict(_SESSOES_CACHE)
         dados = ws.get_all_values()
@@ -114,9 +127,9 @@ def _salvar_sessoes_sync(sessoes: dict):
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
         try:
-            ws = sh.worksheet(SESSOES_ABA)
+            ws = _worksheet_by_names(sh, SESSOES_ABAS)
         except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(title=SESSOES_ABA, rows=100, cols=2)
+            ws = sh.add_worksheet(title=SESSOES_ABAS[0], rows=100, cols=2)
 
         # Reconstrói a aba inteira
         rows = [["chave", "dados"]]
@@ -148,7 +161,7 @@ async def salvar_sessoes(sessoes: dict):
 # OAUTH TOKENS — refresh tokens dos usuários para postar cards interativos
 # ---------------------------------------------------------------------------
 
-TOKENS_ABA = "_oauth_tokens"
+TOKENS_ABAS = ["_oauth_tokens", "oauth tokens", "oauth_tokens"]
 
 
 def _salvar_token_sync(chave: str, refresh_token: str):
@@ -156,9 +169,9 @@ def _salvar_token_sync(chave: str, refresh_token: str):
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
         try:
-            ws = sh.worksheet(TOKENS_ABA)
+            ws = _worksheet_by_names(sh, TOKENS_ABAS)
         except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(title=TOKENS_ABA, rows=50, cols=3)
+            ws = sh.add_worksheet(title=TOKENS_ABAS[0], rows=50, cols=3)
             ws.update("A1", [["chave", "refresh_token"]])
 
         dados = ws.get_all_values()
@@ -177,7 +190,7 @@ def _carregar_token_sync(chave: str) -> str | None:
     """Retorna o refresh_token do usuário ou None se não autorizado."""
     try:
         sh = _client().open_by_key(SPREADSHEET_ID)
-        ws = sh.worksheet(TOKENS_ABA)
+        ws = _worksheet_by_names(sh, TOKENS_ABAS)
         dados = ws.get_all_values()
         for row in dados[1:]:
             if row and row[0] == chave:
