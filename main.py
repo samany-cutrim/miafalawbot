@@ -776,6 +776,23 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
             space_name = (msg_obj.get("space") or {}).get("name") or ""
             primeiro = advogado.strip().split()[0]
 
+            # Envia mensagem engraçada via webhook imediatamente (keep-alive enquanto IA processa)
+            if WEBHOOK_URL:
+                import random as _random
+                _frases_espera = [
+                    "⚖️ Eita, essa decisão é pesada... já já chego com a análise!",
+                    "🧠 A Mia tá quebrando a cabeça aqui... segura a ansiedade!",
+                    "📜 Lendo cada vírgula dessa decisão. Quase lá!",
+                    "☕ Tomando um cafezinho jurídico enquanto analiso... já volto!",
+                    "🤔 Putz, que decisão complicada. Um segundo a mais, por favor!",
+                    "⏳ Ainda aqui! Só terminando de discutir com o juiz virtual...",
+                    "🔍 Investigando os fundamentos com lupa. Quase pronto!",
+                ]
+                try:
+                    await send_webhook(WEBHOOK_URL, _random.choice(_frases_espera))
+                except Exception:
+                    pass
+
             # Tenta processar sincronamente (dentro do timeout de 30s do Chat)
             # Cards retornados como resposta a evento sempre funcionam com botões
             try:
