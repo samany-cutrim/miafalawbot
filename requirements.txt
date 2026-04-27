@@ -8,3 +8,4 @@ google-auth==2.34.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.151.0
 openai>=1.30.0
+json-repair>=0.30.0

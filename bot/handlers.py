@@ -443,12 +443,27 @@ async def analisar_decisao(texto: str, cliente_hint: str, tipo_hint: str) -> dic
 
 
 def _parse_json(raw: str) -> dict:
+    # Tentativa 1: JSON perfeito
     try:
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:
             return json.loads(m.group(0))
     except Exception:
         pass
+    # Tentativa 2: JSON truncado — tenta reparar
+    try:
+        from json_repair import repair_json
+        text = raw.strip()
+        # Pega do primeiro { até o fim (mesmo que incompleto)
+        start = text.find("{")
+        if start != -1:
+            partial = text[start:]
+            repaired = repair_json(partial, return_objects=True)
+            if isinstance(repaired, dict) and repaired:
+                logger.info("[JSON] Reparado com json-repair OK")
+                return repaired
+    except Exception as e:
+        logger.warning("[JSON] json-repair falhou: %s", e)
     logger.warning("Falha ao parsear JSON da IA. Raw: %s", raw[:300])
     return {k: "N/A" for k in [
         "trt", "numero_processo", "nome_reclamante", "data_decisao",
