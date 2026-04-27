@@ -690,18 +690,45 @@ async def _processar_pdf_background(
 
 
 async def _download_pdf_chat(resource_name: str) -> bytes | None:
-    """Baixa PDF via Apps Script como proxy."""
-    # Apps Script como proxy (SA não tem permissão para baixar anexos de chat)
+    """Baixa PDF: tenta SA primeiro, fallback Apps Script."""
+    import base64 as _b64
+
+    # 1. Tenta via Service Account (chat.bot scope)
     try:
-        import base64 as _b64
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as _ga_requests
+
+        creds = service_account.Credentials.from_service_account_file(
+            GOOGLE_SERVICE_ACCOUNT_FILE,
+            scopes=["https://www.googleapis.com/auth/chat.bot"],
+        )
+        creds.refresh(_ga_requests.Request())
+        sa_token = creds.token
+
+        dl_url = f"https://chat.googleapis.com/v1/media/{resource_name}?alt=media"
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
+            sa_resp = await cli.get(dl_url, headers={"Authorization": f"Bearer {sa_token}"})
+
+        logger.info("[PDF] SA download status: %s", sa_resp.status_code)
+        if sa_resp.status_code == 200 and sa_resp.content:
+            logger.info("[PDF] SA OK — %d bytes", len(sa_resp.content))
+            return sa_resp.content
+        logger.warning("[PDF] SA falhou (%s) — tentando Apps Script", sa_resp.status_code)
+    except Exception as e:
+        logger.warning("[PDF] SA erro: %s — tentando Apps Script", e)
+
+    # 2. Fallback: Apps Script proxy
+    if not APPS_SCRIPT_DOPOST_URL:
+        logger.error("[PDF] APPS_SCRIPT_DOPOST_URL não configurado")
+        return None
+    try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
             as_resp = await cli.post(
-                "https://script.google.com/macros/s/AKfycbyg7B1QiZoD_YpaGBCR5qXZEX_5bnrzKTR3WgAYjYbk_xrMyTgubdEmMqa67pZG3CBz/exec",
+                APPS_SCRIPT_DOPOST_URL,
                 json={"action": "download_pdf", "resource_name": resource_name}
             )
 
         logger.info("[PDF] Apps Script status: %s", as_resp.status_code)
-
         if as_resp.status_code == 200:
             as_data = as_resp.json()
             if as_data.get("status") == "ok" and as_data.get("pdf_base64"):
@@ -848,16 +875,9 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                 )
         else:
             # Sem PDF — lembra o usuário
-            return _message_text_and_cards(
-                "📎 Envie o PDF da decisão",
-                (
-                    "Aguardando o PDF da decisão.\n\n"
-                    "Envie o arquivo PDF diretamente neste chat ou cancele."
-                ),
-                [
-                    _primary_button("❌ Cancelar", "cancelar_pdf"),
-                ],
-                "aguardando_pdf"
+            return _new_message_text(
+                "📎 Envie o PDF da decisão agora.\n"
+                "_Aguardando o arquivo. Envie diretamente neste chat ou clique em Cancelar._"
             )
 
     # Busca via texto
