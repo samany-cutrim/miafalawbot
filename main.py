@@ -1294,7 +1294,8 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                     cliente=cliente_hint,
                     tipo_responsabilidade=tipo_hint or "OL",
                 )
-                card = _analysis_actions_card()
+                primeiro = advogado.strip().split()[0]
+                card = _analysis_webhook_card(primeiro, resultado)
                 enviado = await send_card_with_user_token(
                     space_name=space_name,
                     card=card,
@@ -1302,13 +1303,9 @@ async def analisar_e_responder(request: Request, background_tasks: BackgroundTas
                     thread_name=thread_name,
                 )
                 if not enviado:
-                    logger.error("[ANALISAR-BG] Falha ao enviar card para %s", advogado)
-                if WEBHOOK_URL:
-                    primeiro = advogado.strip().split()[0]
-                    await send_webhook(
-                        WEBHOOK_URL,
-                        f"✅ *Análise concluída, {primeiro}!*\n\n{resultado}"
-                    )
+                    logger.error("[ANALISAR-BG] Falha ao enviar card via user token para %s — fallback webhook", advogado)
+                    if WEBHOOK_URL:
+                        await send_card(WEBHOOK_URL, _analysis_webhook_card(primeiro, resultado))
             except Exception as exc:
                 logger.exception("[ANALISAR-BG] Erro: %s", exc)
 
