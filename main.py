@@ -717,11 +717,7 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
     if not await _esta_aguardando_pdf(advogado) and not await esta_aguardando_correcao(advogado):
         relatorio_pendente = await obter_relatorio_pendente(advogado)
         if relatorio_pendente:
-            primeiro = advogado.strip().split()[0]
-            logger.info("[MESSAGE] Sessão pendente detectada para %s — exibindo card de análise", advogado)
-            # Envia a análise como texto separado via webhook, retorna só o card de botões
-            if WEBHOOK_URL:
-                await send_webhook(WEBHOOK_URL, relatorio_pendente)
+            logger.info("[MESSAGE] Sessão pendente — exibindo card de ação para %s", advogado)
             return _new_message_cards([_analysis_actions_card()])
 
     # Aguardando correção
@@ -755,32 +751,50 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
                     "⚠️ Não consegui identificar o arquivo PDF. Tente enviar novamente."
                 )
 
-            # Extrai space_name para usar a Chat REST API no background
             space_name = (msg_obj.get("space") or {}).get("name") or ""
+            primeiro = advogado.strip().split()[0]
 
-            # Usa WEBHOOK_URL do env (variável no Render) para fallback
-            webhook_url = WEBHOOK_URL
-            if not space_name:
-                logger.warning("[PDF] space_name não encontrado para %s", advogado)
+            # Tenta processar sincronamente (dentro do timeout de 30s do Chat)
+            # Cards retornados como resposta a evento sempre funcionam com botões
+            try:
+                pdf_bytes = await asyncio.wait_for(
+                    _download_pdf_chat(resource_name), timeout=10.0
+                )
+                if not pdf_bytes:
+                    raise ValueError("PDF vazio")
 
-            # Dispara análise em background — resposta imediata para o Chat
-            background_tasks.add_task(
-                _processar_pdf_background,
-                resource_name=resource_name,
-                advogado=advogado,
-                cliente=cliente,
-                tipo=tipo,
-                space_name=space_name,
-                webhook_url=webhook_url,
-            )
+                texto_pdf = extrair_texto_pdf(pdf_bytes)
+                if not texto_pdf or len(texto_pdf.strip()) < 50:
+                    raise ValueError("Texto extraído vazio")
 
-            # Resposta imediata (<2s) — Google Chat não faz timeout
-            return _new_message_text(
-                f"⏳ *Analisando decisão...* {advogado}\n"
-                f"Cliente: {cliente or '(detectar automaticamente)'}\n"
-                f"Tipo: {tipo or 'OL'}\n\n"
-                f"_A análise pode levar até 1 minuto. O resultado será enviado aqui._"
-            )
+                resultado = await asyncio.wait_for(
+                    processar_texto_chat(
+                        texto_pdf=texto_pdf,
+                        advogado=advogado,
+                        cliente=cliente,
+                        tipo_responsabilidade=tipo,
+                    ),
+                    timeout=22.0,
+                )
+
+                logger.info("[PDF] Processamento síncrono OK para %s", advogado)
+                return _new_message_cards([_analysis_webhook_card(primeiro, resultado)])
+
+            except Exception as e:
+                logger.warning("[PDF] Processamento síncrono falhou (%s) — usando background task", e)
+                background_tasks.add_task(
+                    _processar_pdf_background,
+                    resource_name=resource_name,
+                    advogado=advogado,
+                    cliente=cliente,
+                    tipo=tipo,
+                    space_name=space_name,
+                    webhook_url=WEBHOOK_URL,
+                )
+                return _new_message_text(
+                    f"⏳ *Analisando decisão, {primeiro}...* \n"
+                    f"_A análise está demorando mais que o esperado. O resultado será enviado em breve._"
+                )
         else:
             # Sem PDF — lembra o usuário
             return _message_text_and_cards(
