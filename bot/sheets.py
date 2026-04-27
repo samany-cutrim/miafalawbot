@@ -158,6 +158,57 @@ async def salvar_sessoes(sessoes: dict):
 
 
 # ---------------------------------------------------------------------------
+# OPERAÇÕES ATÔMICAS POR CHAVE — evita race condition read-copy-write
+# ---------------------------------------------------------------------------
+# Em asyncio single-thread, operações sem await entre elas são atômicas.
+# A persistência no Sheets ocorre APÓS a atualização em memória, então
+# outras coroutines que iniciem durante o await do Sheets já veem o estado
+# correto no _SESSOES_CACHE.
+
+async def _persistir_cache():
+    """Persiste snapshot do cache atual no Sheets (background)."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _salvar_sessoes_sync, dict(_SESSOES_CACHE))
+
+
+async def get_sessao(chave: str) -> dict | None:
+    """Retorna uma cópia da sessão para a chave, ou None se não existir."""
+    v = _SESSOES_CACHE.get(chave)
+    return dict(v) if v else None
+
+
+async def set_sessao(chave: str, dados: dict):
+    """Salva atomicamente uma sessão pela chave e persiste no Sheets."""
+    _SESSOES_CACHE[chave] = dados           # atômico — sem await antes desta linha
+    await _persistir_cache()
+
+
+async def del_sessao(chave: str):
+    """Remove atomicamente uma sessão pela chave e persiste no Sheets."""
+    _SESSOES_CACHE.pop(chave, None)         # atômico — sem await antes desta linha
+    await _persistir_cache()
+
+
+async def patch_sessao(chave: str, updates: dict):
+    """Faz merge atômico de updates na sessão existente e persiste."""
+    current = dict(_SESSOES_CACHE.get(chave) or {})
+    current.update(updates)
+    _SESSOES_CACHE[chave] = current         # atômico — sem await antes desta linha
+    await _persistir_cache()
+
+
+async def move_sessao(from_key: str, to_key: str) -> dict | None:
+    """Renomeia atomicamente uma chave de sessão.
+    Remove from_key e cria to_key com os mesmos dados.
+    Retorna os dados movidos, ou None se from_key não existia."""
+    data = _SESSOES_CACHE.pop(from_key, None)   # atômico — sem await
+    if data is not None:
+        _SESSOES_CACHE[to_key] = data
+    await _persistir_cache()
+    return dict(data) if data else None
+
+
+# ---------------------------------------------------------------------------
 # OAUTH TOKENS — refresh tokens dos usuários para postar cards interativos
 # ---------------------------------------------------------------------------
 

@@ -17,7 +17,11 @@ _TZ_BRASILIA = timezone(timedelta(hours=-3))
 def _now_br() -> datetime:
     return datetime.now(_TZ_BRASILIA)
 
-from bot.sheets import salvar_decisao, buscar_precedentes, carregar_sessoes, salvar_sessoes
+from bot.sheets import (
+    salvar_decisao, buscar_precedentes,
+    carregar_sessoes, salvar_sessoes,
+    get_sessao, set_sessao, del_sessao, patch_sessao, move_sessao,
+)
 from bot.config import GITHUB_TOKEN
 from bot.webhook import send_webhook
 
@@ -721,17 +725,10 @@ async def confirmar_sessao(advogado: str, webhook_url: str):
 async def confirmar_sessao_data(advogado: str) -> tuple[str, bool]:
     chave = _chave_sessao(advogado)
     primeiro = advogado.strip().split()[0]
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave)
+    # Atomicamente move sessão pendente → sessão de e-mail (sem race condition)
+    row = await move_sessao(chave, f"email_{chave}")
     if not row:
         return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para confirmar. Que tal enviar um novo PDF? 😊", False
-    
-    # Limpa a sessão pendente (importante: mesmo que o salvamento falhe, não queremos ficar em loop)
-    dados_email = {k: v for k, v in row.items()}
-    del sessoes[chave]
-    chave_email = f"email_{chave}"
-    sessoes[chave_email] = dados_email
-    await salvar_sessoes(sessoes)
     
     row_limpo = {k: v for k, v in row.items() if not k.startswith("_")}
     
@@ -781,10 +778,9 @@ async def cancelar_sessao(advogado: str, webhook_url: str):
 async def cancelar_sessao_data(advogado: str) -> str:
     chave = _chave_sessao(advogado)
     primeiro = advogado.strip().split()[0]
-    sessoes = await carregar_sessoes()
-    if chave in sessoes:
-        del sessoes[chave]
-        await salvar_sessoes(sessoes)
+    existing = await get_sessao(chave)
+    if existing is not None:
+        await del_sessao(chave)
         return f"Tudo bem, {primeiro}! Análise descartada, nenhum dado foi salvo. Quando quiser, é só enviar um novo PDF! 😊"
     return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para cancelar. Tudo certo por aqui! 👍"
 
@@ -792,13 +788,10 @@ async def cancelar_sessao_data(advogado: str) -> str:
 async def marcar_aguardando_correcao(advogado: str) -> str:
     chave = _chave_sessao(advogado)
     primeiro = advogado.strip().split()[0]
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave)
+    row = await get_sessao(chave)
     if not row:
         return f"Hmm, {primeiro}, não encontrei nenhuma análise pendente para corrigir. Envie um PDF para começar! 😊"
-    row["_aguardando_correcao"] = True
-    sessoes[chave] = row
-    await salvar_sessoes(sessoes)
+    await patch_sessao(chave, {"_aguardando_correcao": True})
     return (
         f"✏️ Claro, {primeiro}! Me diga o que quer corrigir — mencione @Mia Falaw Bot e explique a correção.\n\n"
         f"Exemplos:\n"
@@ -810,8 +803,7 @@ async def marcar_aguardando_correcao(advogado: str) -> str:
 
 async def esta_aguardando_correcao(advogado: str) -> bool:
     chave = _chave_sessao(advogado)
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave) or {}
+    row = await get_sessao(chave) or {}
     return bool(row.get("_aguardando_correcao"))
 
 
@@ -819,8 +811,7 @@ async def obter_relatorio_pendente(advogado: str) -> str | None:
     """Retorna o relatório formatado se houver sessão pendente de confirmação.
     Retorna None se não houver sessão, ou se estiver aguardando PDF/correção."""
     chave = _chave_sessao(advogado)
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave)
+    row = await get_sessao(chave)
     if not row:
         return None
     if row.get("_aguardando_correcao"):
@@ -1022,8 +1013,7 @@ async def gerar_email_sessao_data(advogado: str) -> str:
     """Gera o e-mail de reporte ao cliente a partir da sessão confirmada."""
     chave = _chave_sessao(advogado)
     chave_email = f"email_{chave}"
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave_email)
+    row = await get_sessao(chave_email)
 
     if not row:
         return (
@@ -1055,8 +1045,7 @@ async def gerar_email_sessao_data(advogado: str) -> str:
         # Formata o e-mail com HTML estruturado
         email_html = _formatar_email_html(corpo_email, assunto, row)
 
-        del sessoes[chave_email]
-        await salvar_sessoes(sessoes)
+        await del_sessao(chave_email)
 
         logger.info("E-mail gerado para %s", advogado)
         return email_html
@@ -1075,12 +1064,7 @@ async def dispensar_email_sessao_data(advogado: str) -> str:
     chave = _chave_sessao(advogado)
     primeiro = advogado.strip().split()[0]
     chave_email = f"email_{chave}"
-    sessoes = await carregar_sessoes()
-
-    if chave_email in sessoes:
-        del sessoes[chave_email]
-        await salvar_sessoes(sessoes)
-
+    await del_sessao(chave_email)
     return f"Combinado, {primeiro}! Sem e-mail por enquanto. Qualquer coisa é só chamar! 😊"
 
 
@@ -1115,8 +1099,7 @@ async def corrigir_sessao(advogado: str, instrucao: str, webhook_url: str):
 
 async def corrigir_sessao_data(advogado: str, instrucao: str) -> tuple[bool, str]:
     chave = _chave_sessao(advogado)
-    sessoes = await carregar_sessoes()
-    row = sessoes.get(chave)
+    row = await get_sessao(chave)
     if not row:
         return False, f"⚠️ *{advogado}*, não há análise pendente para corrigir."
 
@@ -1174,8 +1157,7 @@ async def corrigir_sessao_data(advogado: str, instrucao: str) -> tuple[bool, str
         row_corrigido["_tipo_hint"]    = hints["tipo"]
         row_corrigido["_aguardando_correcao"] = False
         row_corrigido["_analise_raw"]  = analise_corrigida
-        sessoes[chave] = row_corrigido
-        await salvar_sessoes(sessoes)
+        await set_sessao(chave, row_corrigido)
 
         relatorio  = formatar_relatorio(analise_corrigida, sigla)
         return True, relatorio
@@ -1224,9 +1206,7 @@ async def _analisar_e_aguardar(
     row["_aguardando_correcao"] = False
     row["_analise_raw"]  = analise  # análise completa para reconstruir relatório fiel
     chave = _chave_sessao(advogado)
-    sessoes = await carregar_sessoes()
-    sessoes[chave] = row
-    await salvar_sessoes(sessoes)
+    await set_sessao(chave, row)
     logger.info("Sessão pendente criada para %s (chave: %s)", advogado, chave)
 
     # Retorna relatório + instrução de confirmação

@@ -78,6 +78,9 @@ from bot.handlers import (
     processar_texto_chat,
     carregar_sessoes,
     salvar_sessoes,
+    get_sessao,
+    set_sessao,
+    del_sessao,
 )
 from bot.webhook import send_webhook, send_card, send_card_with_user_token, send_card_with_service_account, send_text_with_service_account
 from bot.oauth import get_auth_url, exchange_code, refresh_access_token, get_user_info
@@ -543,28 +546,24 @@ def _form_value(event: dict, key: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def _marcar_aguardando_pdf(advogado: str, cliente: str, tipo: str):
-    sessoes = await carregar_sessoes()
     chave = advogado.strip().lower().split()[0] if advogado else "advogado"
-    sessoes[chave] = {
+    await set_sessao(chave, {
         "_aguardando_pdf": True,
         "_cliente_hint": cliente,
         "_tipo_hint": tipo,
         "_aguardando_correcao": False,
-    }
-    await salvar_sessoes(sessoes)
+    })
 
 
 async def _esta_aguardando_pdf(advogado: str) -> bool:
-    sessoes = await carregar_sessoes()
     chave = advogado.strip().lower().split()[0] if advogado else "advogado"
-    row = sessoes.get(chave) or {}
+    row = await get_sessao(chave) or {}
     return bool(row.get("_aguardando_pdf"))
 
 
 async def _get_hints_pdf(advogado: str) -> tuple[str, str]:
-    sessoes = await carregar_sessoes()
     chave = advogado.strip().lower().split()[0] if advogado else "advogado"
-    row = sessoes.get(chave) or {}
+    row = await get_sessao(chave) or {}
     return row.get("_cliente_hint") or "", row.get("_tipo_hint") or ""
 
 
@@ -945,11 +944,8 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
         }
 
     if function_name == "cancelar_pdf":
-        sessoes = await carregar_sessoes()
         chave = advogado.strip().lower().split()[0] if advogado else "advogado"
-        if chave in sessoes:
-            del sessoes[chave]
-            await salvar_sessoes(sessoes)
+        await del_sessao(chave)
         return _update_message_cards([await _home_card(advogado)])
 
     if function_name == "confirm_decision":
