@@ -862,7 +862,10 @@ async def _handle_message(event: dict, background_tasks: BackgroundTasks) -> dic
             _card_with_buttons(
                 "📧 Sugestão de e-mail",
                 email_text,
-                [_primary_button("◀ Menu", "open_home")],
+                [
+                    _primary_button("✅ Encerrar", "open_home"),
+                    _primary_button("📎 Enviar nova decisão", "open_decision_dialog", open_dialog=True),
+                ],
                 "email_result",
                 is_html=True,
             )
@@ -986,7 +989,10 @@ async def _handle_card_click(advogado: str, function_name: str, event: dict) -> 
             _card_with_buttons(
                 "📧 Sugestão de e-mail",
                 email_text,
-                [_primary_button("◀ Menu", "open_home")],
+                [
+                    _primary_button("✅ Encerrar", "open_home"),
+                    _primary_button("📎 Enviar nova decisão", "open_decision_dialog", open_dialog=True),
+                ],
                 "email_result",
                 is_html=True,
             )

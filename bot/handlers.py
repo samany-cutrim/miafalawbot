@@ -872,6 +872,8 @@ DADOS DA DECISÃO:
 - Data da decisão: {data_decisao}
 - Vara/Turma: {vara_turma}
 - Valor da condenação: {valor_condenacao}
+- Custas processuais: {custas}
+- Recomendação estratégica: {recomendacao}
 - Resumo da decisão: {resumo}
 - Entendimentos favoráveis à empresa: {favoraveis}
 - Entendimentos desfavoráveis à empresa: {desfavoraveis}
@@ -889,13 +891,13 @@ Tudo bem?
 *Cliente:* {cliente}
 *Vara/Turma:* {vara_turma}
 
-3. RESUMO
-*Resumo:*
+3. DISPOSITIVO
+*Dispositivo:*
 [Parágrafo resumindo a decisão: favorável/desfavorável/parcial para a empresa]
 
 4. FAVORÁVEIS
 *Favoráveis (para a empresa):*
-[Numerada lista 1-5+ com formato: 1. *Tópico:* descrição]
+[Numerada lista 1-5+ com formato: 1. [Pedido/Tese]: descrição objetiva]
 
 5. DESFAVORÁVEIS (se houver)
 *Desfavoráveis (para a empresa):*
@@ -906,7 +908,8 @@ Atenciosamente,
 
 FORMATO DE LISTAS:
 - Use números (1, 2, 3...) seguido de ponto e espaço
-- Cada item começa com *Tópico em negrito:* seguido de descrição
+- NÃO use a palavra "Tópico"
+- Cada item deve citar o pedido/tese decidido e a conclusão correspondente
 - Um item por linha
 
 REGRAS:
@@ -916,6 +919,7 @@ REGRAS:
 - Descreva apenas os fundamentos principais
 - Se favorável: celebre discretamente a qualidade da defesa
 - Se desfavorável: seja objetivo e tranquilizador
+- Se desfavorável à empresa: inclua obrigatoriamente menção ao valor da condenação e às custas (ou "não identificadas" se ausentes) e recomende a interposição de recurso com justificativa breve
 
 Retorne APENAS o corpo do e-mail neste formato exato, começando em "Olá, Pessoal." e terminando em "Atenciosamente,"."""
 
@@ -962,6 +966,9 @@ def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
     
     html += "<br><b>───────────────────────────────────────────</b><br><br>"
     
+    # Normaliza rótulos para manter padrão interno esperado.
+    corpo_email = re.sub(r'(?im)^\*?resumo:\*?\s*$', '*Dispositivo:*', corpo_email)
+
     # Processa linhas do corpo do email
     lines = corpo_email.split('\n')
     for i, line in enumerate(lines):
@@ -988,9 +995,9 @@ def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
             formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
             html += f'{formatted}<br>'
         elif re.match(r'^\d+\.\s', stripped):
-            # Itens numerados: 1. *Tópico:* descrição
+            # Itens numerados: remove "Tópico:" quando vier da IA e mantém pedido/tese direto.
             # Substitui *...:* por <b>...</b> e mantém numeração
-            formatted = stripped
+            formatted = re.sub(r'^(\d+\.\s*)\*?[Tt][óo]pico\*?:\s*', r'\1', stripped)
             formatted = re.sub(r'\*([^*]+):\*', r'<b>\1:</b>', formatted)
             # Se houver mais asteriscos, substitui por bold
             formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
@@ -1001,6 +1008,20 @@ def _formatar_email_html(corpo_email: str, assunto: str, row: dict) -> str:
             # Substitui *texto* por <b>texto</b>
             formatted = re.sub(r'\*([^*]+)\*', r'<b>\1</b>', formatted)
             html += f'{formatted}<br>'
+
+    # Garante bloco estratégico mínimo para decisões desfavoráveis.
+    resultado = (row.get("RESULTADO DA DECISÃO") or "").lower()
+    if "desfavor" in resultado:
+        custas = row.get("CUSTAS") or "Não identificadas na decisão"
+        recomendacao = (
+            row.get("recomendacao")
+            or (row.get("_analise_raw") or {}).get("recomendacao")
+            or "Recorrer"
+        )
+        html += "<br><b>Recomendação estratégica:</b> Diante do resultado desfavorável à empresa, recomenda-se a interposição do recurso cabível.<br>"
+        html += f"<b>Valor da condenação:</b> {row.get('VALOR DA CONDENAÇÃO', 'N/A') or 'N/A'}<br>"
+        html += f"<b>Custas processuais:</b> {custas}<br>"
+        html += f"<b>Diretriz recursal:</b> {recomendacao}<br>"
     
     html += "<br><b>───────────────────────────────────────────</b><br><br>"
     html += f"<b>Assunto:</b><br><i>{assunto}</i><br><br>"
@@ -1033,6 +1054,12 @@ async def gerar_email_sessao_data(advogado: str) -> str:
             data_decisao=row.get("DATA DA DECISÃO", "N/A"),
             vara_turma=row.get("VARA/TURMA", "N/A"),
             valor_condenacao=row.get("VALOR DA CONDENAÇÃO", "N/A"),
+            custas=row.get("CUSTAS", "Não identificadas na decisão") or "Não identificadas na decisão",
+            recomendacao=(
+                row.get("recomendacao")
+                or (row.get("_analise_raw") or {}).get("recomendacao")
+                or "Recorrer"
+            ),
             resumo=row.get("RESUMO", "N/A"),
             favoraveis=row.get("ENTENDIMENTOS FAVORÁVEIS", "N/A") or "Nenhum",
             desfavoraveis=row.get("ENTENDIMENTOS DESFAVORÁVEIS", "N/A") or "Nenhum",
