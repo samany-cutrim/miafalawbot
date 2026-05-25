@@ -397,6 +397,7 @@ Retorne APENAS um JSON válido com os seguintes campos:
   "nome_reclamante": "nome completo do trabalhador/reclamante ou N/A",
   "data_decisao": "DD/MM/AAAA — procure na assinatura final, cabeçalho ou data de publicação ou N/A",
   "tipo_decisao": "Sentença | Acórdão | Decisão Interlocutória | Despacho",
+  "decisao_merito": "Sim | Não — se a decisão resolve o mérito da causa (pedidos analisados), ou apenas questões processuais/preliminares",
   "resultado_geral": "Favorável | Desfavorável | Parcialmente Favorável — SEMPRE do ponto de vista da EMPRESA",
   "cliente_detectado": "razão social completa do réu/reclamado principal ou N/A",
   "tipo_responsabilidade_detectado": "OL | Nuvem | Terceirização | Subsidiária | Ex Funcionário | Ex-Foodlovers | Marketplace | N/A",
@@ -505,7 +506,10 @@ def formatar_relatorio(d: dict, sigla: str) -> str:
     r = f"<b>{icone_resultado} ANÁLISE CONCLUÍDA — aguardando confirmação</b><br><br>"
 
     r += "<b>Identificação</b><br>"
+    merito = d.get('decisao_merito', 'N/A')
+    merito_icone = '✅' if str(merito).strip().lower() == 'sim' else ('❌' if str(merito).strip().lower() == 'não' else '⚪')
     r += f"📋 <b>{d.get('tipo_decisao', 'N/A')}</b> — {icone_resultado} {resultado}<br>"
+    r += f"{merito_icone} <b>Decisão de Mérito:</b> {merito}<br>"
     r += f"🏛️ <b>TRT:</b> {d.get('trt', 'N/A')}<br>"
     r += f"📄 <b>Processo:</b> {d.get('numero_processo', 'N/A')}<br>"
     r += f"👤 <b>Reclamante:</b> {d.get('nome_reclamante', 'N/A')}<br>"
