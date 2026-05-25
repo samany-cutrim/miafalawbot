@@ -93,10 +93,25 @@ logger = logging.getLogger(__name__)
 ENDPOINT_URL = "https://miafalawbot.onrender.com/chat"
 
 
+async def _self_ping():
+    """Faz requisição para o próprio /health a cada 10 minutos para evitar sleep no Render free tier."""
+    await asyncio.sleep(60)  # aguarda o servidor subir completamente
+    async with httpx.AsyncClient(timeout=30) as client:
+        while True:
+            try:
+                r = await client.get(f"{ENDPOINT_URL.rsplit('/chat', 1)[0]}/health")
+                logger.info("[self-ping] /health → %s", r.status_code)
+            except Exception as e:
+                logger.warning("[self-ping] falhou: %s", e)
+            await asyncio.sleep(600)  # 10 minutos
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Mia Falaw Bot v25 iniciado.")
+    task = asyncio.create_task(_self_ping())
     yield
+    task.cancel()
 
 
 app = FastAPI(title="Mia Falaw Bot", lifespan=lifespan)
