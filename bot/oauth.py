@@ -20,7 +20,7 @@ OAUTH_CLIENT_ID     = os.environ.get("OAUTH_CLIENT_ID", "")
 OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URI  = os.environ.get(
     "OAUTH_REDIRECT_URI",
-    "https://miafalawbot.onrender.com/auth/callback",
+    "https://mia-falaw-bot-ngs5.onrender.com/auth/callback",
 )
 
 SCOPES = [
