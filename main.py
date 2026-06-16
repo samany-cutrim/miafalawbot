@@ -90,7 +90,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # URL do endpoint — obrigatório para action.function em Workspace Add-on
-ENDPOINT_URL = "https://miafalawbot.onrender.com/chat"
+ENDPOINT_URL = "https://mia-falaw-bot-ngs5.onrender.com/chat"
 
 
 async def _self_ping():

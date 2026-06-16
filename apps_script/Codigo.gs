@@ -6,7 +6,7 @@
  * 2) Trigger time-based faz polling de mensagens no Chat e processa comandos.
  */
 
-var RENDER_URL = "https://SEU-APP.onrender.com";
+var RENDER_URL = "https://mia-falaw-bot-ngs5.onrender.com";
 var WEBHOOK_URL = "https://chat.googleapis.com/v1/spaces/SEU_SPACE/messages?key=SUA_KEY&token=SEU_TOKEN";
 var FORM_ID = "SEU_FORM_ID";
 var SPACE_NAME = "spaces/SEU_SPACE";
