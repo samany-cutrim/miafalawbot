@@ -6,6 +6,9 @@
  * 2) Trigger time-based faz polling de mensagens no Chat e processa comandos.
  */
 
+// URL do backend. Pode ser o Render direto (principal) ou, para failover
+// automático entre os dois deploys do Render, a URL do Cloudflare Worker
+// publicado em /cloudflare (ver cloudflare/README.md).
 var RENDER_URL = "https://mia-falaw-bot-ngs5.onrender.com";
 var WEBHOOK_URL = "https://chat.googleapis.com/v1/spaces/SEU_SPACE/messages?key=SUA_KEY&token=SEU_TOKEN";
 var FORM_ID = "SEU_FORM_ID";
