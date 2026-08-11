@@ -8,14 +8,21 @@ Worker tenta automaticamente o Render de fallback.
 - Principal: `https://mia-falaw-bot-ngs5.onrender.com`
 - Fallback: `https://miafalawbot-evjo.onrender.com`
 
-## Deploy
+O `wrangler.toml` fica na **raiz do repositório** (não dentro de `cloudflare/`)
+apontando `main = "cloudflare/worker.js"`. Isso é proposital: se o deploy for
+feito conectando o Cloudflare direto no repositório Git (opção abaixo), o
+build roda `wrangler deploy` a partir da raiz — se o `wrangler.toml` estivesse
+dentro da subpasta, o Cloudflare não o encontraria, tentaria detectar um
+projeto estático e falharia com "Could not detect a directory containing
+static files".
+
+## Deploy — opção A: linha de comando (rápido, manual)
 
 Requer [Node.js](https://nodejs.org) e uma conta Cloudflare (grátis).
 
 ```bash
-cd cloudflare
 npx wrangler login          # abre o navegador para autenticar na sua conta Cloudflare
-npx wrangler deploy         # publica o Worker
+npx wrangler deploy         # publica o Worker (rodar a partir da raiz do repo)
 ```
 
 Ao final do deploy, o Wrangler mostra a URL pública do Worker, algo como:
@@ -23,6 +30,18 @@ Ao final do deploy, o Wrangler mostra a URL pública do Worker, algo como:
 ```
 https://mia-falaw-bot-router.<seu-subdominio>.workers.dev
 ```
+
+## Deploy — opção B: conectado ao Git (auto-deploy a cada push)
+
+No dashboard Cloudflare: **Workers & Pages → Create → Import a repository**,
+selecione este repositório. Deixe o **Root directory** em branco (raiz) e o
+**Deploy command** como `npx wrangler deploy` (padrão). Como o
+`wrangler.toml` já está na raiz, o build encontra a configuração de primeira
+— não precisa mexer em "Root directory" nem em nenhuma configuração
+escondida.
+
+Depois de conectado, todo push na branch configurada dispara um novo deploy
+automaticamente.
 
 ## Usando o Worker no bot
 
@@ -47,6 +66,7 @@ tier) continua batendo no próprio serviço normalmente.
 
 ## Ajustando o timeout ou as URLs
 
-Edite `wrangler.toml` (`[vars]`) e rode `npx wrangler deploy` de novo, ou
-ajuste as variáveis direto no dashboard Cloudflare
+Edite o `wrangler.toml` na raiz do repositório (`[vars]`) e rode
+`npx wrangler deploy` de novo (ou dê push, se estiver no modo Git-conectado),
+ou ajuste as variáveis direto no dashboard Cloudflare
 (Workers & Pages → mia-falaw-bot-router → Settings → Variables).
