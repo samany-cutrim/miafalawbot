@@ -22,7 +22,12 @@ from bot.sheets import (
     carregar_sessoes, salvar_sessoes,
     get_sessao, set_sessao, del_sessao, patch_sessao, move_sessao,
 )
-from bot.config import GITHUB_TOKEN
+from bot.config import (
+    GITHUB_TOKEN,
+    OPENROUTER_API_KEY, OPENROUTER_MODEL,
+    GROQ_API_KEY, GROQ_MODEL,
+    AIMLAPI_API_KEY, AIMLAPI_MODEL,
+)
 from bot.webhook import send_webhook
 
 import httpx
@@ -46,6 +51,28 @@ if GITHUB_TOKEN:
         logger.info("GitHub Copilot (openai SDK) inicializado com sucesso.")
     except Exception as e:
         logger.error("Falha ao inicializar GitHub Copilot: %s", e)
+
+# Provedores extras (OpenAI-compatible) — entram no rodízio como fallback
+# quando o GitHub Copilot esgota os modelos ou falha. Cada um só é ativado
+# se a respectiva API key estiver configurada.
+_provedores_extra: list[tuple[str, "AsyncOpenAI", str]] = []
+
+
+def _iniciar_provedor_extra(nome: str, api_key: str, base_url: str, modelo: str) -> None:
+    if not api_key:
+        return
+    try:
+        from openai import AsyncOpenAI
+        cliente = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        _provedores_extra.append((nome, cliente, modelo))
+        logger.info("Provedor extra %s inicializado com sucesso.", nome)
+    except Exception as e:
+        logger.error("Falha ao inicializar provedor extra %s: %s", nome, e)
+
+
+_iniciar_provedor_extra("OpenRouter", OPENROUTER_API_KEY, "https://openrouter.ai/api/v1", OPENROUTER_MODEL)
+_iniciar_provedor_extra("Groq", GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_MODEL)
+_iniciar_provedor_extra("AIML API", AIMLAPI_API_KEY, "https://api.aimlapi.com/v1", AIMLAPI_MODEL)
 
 # ---------------------------------------------------------------------------
 # SESSÕES PENDENTES — persistidas no Google Sheets para sobreviver a restarts
@@ -308,6 +335,23 @@ async def _resolver_modelos_github() -> list[str]:
         _cached_model_order = list(modelos_validos)
     return _cached_model_order
 
+_SYSTEM_PROMPT = (
+    "Você é Mia, assistente jurídica especializada em direito trabalhista brasileiro, "
+    "com vasta experiência em análise de decisões judiciais. "
+    "Quando solicitado a retornar JSON, responda APENAS com JSON válido, sem markdown, "
+    "sem blocos de código, sem explicações e sem texto adicional antes ou depois do JSON."
+)
+
+
+def _truncar_prompt(prompt: str, limite: int, rotulo: str) -> str:
+    # Truncagem inteligente: pega primeiro bloco + último bloco para não perder dados de assinatura/data
+    if len(prompt) <= limite:
+        return prompt
+    metade = limite // 2
+    logger.warning("Prompt truncado de %d para %d chars para %s.", len(prompt), limite, rotulo)
+    return prompt[:metade] + "\n\n[...trecho intermediário omitido...]\n\n" + prompt[-metade:]
+
+
 async def _chamar_ia(prompt: str) -> str:
     global _last_success_model
 
@@ -323,34 +367,17 @@ async def _chamar_ia(prompt: str) -> str:
             modelos = [_last_success_model] + [m for m in modelos if m != _last_success_model]
 
         if not modelos:
-            raise RuntimeError(
-                "Nenhum modelo de chat válido disponível no endpoint da conta. "
-                "Use /debug-models para verificar os modelos liberados para o GITHUB_TOKEN."
-            )
+            logger.warning("Nenhum modelo válido no GitHub Copilot — tentando provedores extras, se houver.")
+            modelos = []
 
-        # Trunca o prompt para não exceder o limite de tokens do endpoint
-        # Truncagem inteligente: pega primeiro bloco + último bloco para não perder dados de assinatura/data
-        if len(prompt) > _GITHUB_MAX_CHARS:
-            metade = _GITHUB_MAX_CHARS // 2
-            prompt_github = prompt[:metade] + "\n\n[...trecho intermediário omitido...]\n\n" + prompt[-metade:]
-            logger.warning("Prompt truncado de %d para %d chars para GitHub Copilot.", len(prompt), _GITHUB_MAX_CHARS)
-        else:
-            prompt_github = prompt
+        prompt_github = _truncar_prompt(prompt, _GITHUB_MAX_CHARS, "GitHub Copilot")
         for model_name in modelos:
             try:
                 response = await _copilot.chat.completions.create(
                     model=model_name,
                     max_tokens=2048,
                     messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "Você é Mia, assistente jurídica especializada em direito trabalhista brasileiro, "
-                                "com vasta experiência em análise de decisões judiciais. "
-                                "Quando solicitado a retornar JSON, responda APENAS com JSON válido, sem markdown, "
-                                "sem blocos de código, sem explicações e sem texto adicional antes ou depois do JSON."
-                            ),
-                        },
+                        {"role": "system", "content": _SYSTEM_PROMPT},
                         {"role": "user", "content": prompt_github},
                     ],
                 )
@@ -368,9 +395,28 @@ async def _chamar_ia(prompt: str) -> str:
                 else:
                     logger.warning("GitHub Copilot modelo %s falhou (%s). Tentando próximo...", model_name, e)
 
+    # Provedores extras (OpenRouter, Groq, AIML API) — só entram se configurados
+    # via env var, usados como fallback quando o GitHub Copilot esgota ou falha.
+    for nome, cliente, modelo in _provedores_extra:
+        try:
+            prompt_extra = _truncar_prompt(prompt, _GITHUB_MAX_CHARS, nome)
+            response = await cliente.chat.completions.create(
+                model=modelo,
+                max_tokens=2048,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt_extra},
+                ],
+            )
+            logger.info("IA: %s respondeu com modelo %s.", nome, modelo)
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            logger.warning("Provedor extra %s (modelo %s) falhou (%s). Tentando próximo...", nome, modelo, e)
+
     raise RuntimeError(
-        "Nenhuma IA disponível no endpoint com modelos de chat/completion. "
-        "Confirme o GITHUB_TOKEN e os modelos liberados para a conta (verifique /debug-models)."
+        "Nenhuma IA disponível (GitHub Copilot e provedores extras esgotados/indisponíveis). "
+        "Confirme o GITHUB_TOKEN e os modelos liberados para a conta (verifique /debug-models), "
+        "ou configure OPENROUTER_API_KEY / GROQ_API_KEY / AIMLAPI_API_KEY."
     )
 
 
