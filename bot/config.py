@@ -6,6 +6,17 @@ import json
 import tempfile
 
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
+
+# Provedores extras de IA (OpenAI-compatible) — usados como fallback quando o
+# GitHub Copilot esgota os modelos disponíveis ou falha. Cada um só entra no
+# rodízio se a respectiva API key estiver configurada.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL          = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+AIMLAPI_API_KEY     = os.environ.get("AIMLAPI_API_KEY", "")
+AIMLAPI_MODEL       = os.environ.get("AIMLAPI_MODEL", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
+
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1DNb3UWPAfd3wTYXGtr_4MDy7RoYOhSxbr2_FEVvDDaY")
 WEBHOOK_URL       = os.environ.get("WEBHOOK_URL", "")
 APPS_SCRIPT_DOPOST_URL = os.environ.get("APPS_SCRIPT_DOPOST_URL", "")
