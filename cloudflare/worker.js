@@ -16,6 +16,23 @@ const DEFAULT_PRIMARY_URL = "https://mia-falaw-bot-ngs5.onrender.com";
 const DEFAULT_FALLBACK_URL = "https://miafalawbot-evjo.onrender.com";
 const DEFAULT_TIMEOUT_MS = 15000;
 
+// Cabeçalhos hop-by-hop / de framing de corpo: como o corpo já é buferizado
+// inteiro antes de reenviar, esses cabeçalhos do request original (ex.
+// Transfer-Encoding: chunked) ficam inconsistentes com o corpo real e podem
+// corromper o POST reenviado — o fetch() recalcula Content-Length sozinho.
+const HOP_BY_HOP_HEADERS = [
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
+];
+
 export default {
   async fetch(request, env) {
     const primaryUrl = env.PRIMARY_URL || DEFAULT_PRIMARY_URL;
@@ -29,7 +46,7 @@ export default {
     const buildRequest = (base) => {
       const target = new URL(incoming.pathname + incoming.search, base);
       const headers = new Headers(request.headers);
-      headers.delete("host");
+      for (const h of HOP_BY_HOP_HEADERS) headers.delete(h);
       return new Request(target, {
         method: request.method,
         headers,
