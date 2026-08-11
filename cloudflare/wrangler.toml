@@ -1,0 +1,8 @@
+name = "mia-falaw-bot-router"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+PRIMARY_URL = "https://mia-falaw-bot-ngs5.onrender.com"
+FALLBACK_URL = "https://miafalawbot-evjo.onrender.com"
+PRIMARY_TIMEOUT_MS = "15000"
