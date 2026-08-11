@@ -7,6 +7,7 @@ v25 — Background task para análise de PDF (resolve timeout de 30s do Google C
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -94,12 +95,18 @@ ENDPOINT_URL = "https://mia-falaw-bot-ngs5.onrender.com/chat"
 
 
 async def _self_ping():
-    """Faz requisição para o próprio /health a cada 10 minutos para evitar sleep no Render free tier."""
+    """Faz requisição para o próprio /health a cada 10 minutos para evitar sleep no Render free tier.
+
+    Usa RENDER_EXTERNAL_URL (preenchida automaticamente pelo Render com a URL
+    pública de cada serviço) para que o ping acerte o próprio serviço tanto no
+    deploy principal quanto no de fallback — ambos rodam este mesmo main.py.
+    """
+    self_url = os.environ.get("RENDER_EXTERNAL_URL") or ENDPOINT_URL.rsplit("/chat", 1)[0]
     await asyncio.sleep(60)  # aguarda o servidor subir completamente
     async with httpx.AsyncClient(timeout=30) as client:
         while True:
             try:
-                r = await client.get(f"{ENDPOINT_URL.rsplit('/chat', 1)[0]}/health")
+                r = await client.get(f"{self_url}/health")
                 logger.info("[self-ping] /health → %s", r.status_code)
             except Exception as e:
                 logger.warning("[self-ping] falhou: %s", e)
